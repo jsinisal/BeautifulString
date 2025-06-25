@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BeautifulString README</title>
+</head>
+<body>
+  <h1>BeautifulString</h1>
+  <p><strong>BeautifulString</strong> is a high-performance Python C extension module designed for advanced string manipulation and parsing using format-string-based syntax. Inspired by the functionality of C's <code>sscanf</code>, this module provides powerful utilities for extracting structured data from strings with high speed and flexibility.</p>
+
+  <h2>Features</h2>
+  <ul>
+    <li><strong>strfetch(input_str, input_slices)</strong><br>
+      Extracts substrings using Python-style slice syntax (e.g. <code>[::-1]</code>, <code>[2:]</code>, <code>[:5]</code>).
+    </li>
+    <li><strong>strscan(input_str, format_str, return_type="list", dict_keys=None)</strong><br>
+      Parses tokenized input based on a format string and returns extracted values.
+      <ul>
+        <li>Supports specifiers: <code>%s</code>, <code>%d</code>, <code>%u</code>, <code>%f</code>, <code>%lf</code>, <code>%x</code></li>
+        <li>Supports named fields using syntax like <code>%s(name)</code></li>
+        <li>Supports quoted strings with escape sequences (e.g. <code>"Hello\nWorld"</code>)</li>
+        <li>Return types: <code>list</code>, <code>tuple</code>, <code>dict</code>, or <code>tuple_list</code></li>
+      </ul>
+    </li>
+    <li><strong>strmatch(input_str, format_str, return_container="list")</strong><br>
+      Matches a string exactly using a format-based template.
+      <ul>
+        <li>Same specifier support as <code>strscan</code>, with strict full match requirement</li>
+        <li>Supports named fields and quoted strings</li>
+      </ul>
+    </li>
+    <li><strong>strsearch(input_str, format_str, start_index=0, max_matches=-1, return_container="list")</strong><br>
+      Searches a string for repeated occurrences of a format-based pattern.
+      <ul>
+        <li>Partial match mode with multi-hit capability</li>
+        <li>Returns a list of values (dicts, tuples, etc.) depending on <code>return_container</code></li>
+      </ul>
+    </li>
+  </ul>
+
+  <h2>Installation</h2>
+  <pre><code>python setup.py build_ext --inplace</code></pre>
+
+  <h2>Example Usage</h2>
+  <pre><code>import BeautifulString as bs
+
+s = "User: Alice Score: 99 User: Bob Score: 88"
+pattern = "User: %s(name) Score: %d(score)"
+
+matches = bs.strsearch(s, pattern, max_matches=2, return_container="dict")
+print(matches)  # [{'name': 'Alice', 'score': 99}, {'name': 'Bob', 'score': 88}]
+
+info = bs.strmatch("X: foo Y: 42", "X: %s(x) Y: %d(y)", return_container="tuple")
+print(info)  # ('foo', 42)
+
+scan_result = bs.strscan('Name: "Alice Smith" Age: 30', "Name: %s(name) Age: %d(age)", return_type="dict")
+print(scan_result)  # {'name': 'Alice Smith', 'age': 30}
+
+slice_result = bs.strfetch("abcdefgh", "[::-1]")
+print(slice_result)  # 'hgfedcba'
+</code></pre>
+
+  <h2>License</h2>
+  <p>MIT License</p>
+
+  <hr>
+  <p>For more details and examples, see the <a href="docs.html">BeautifulString documentation</a>.</p>
+</body>
+</html>
