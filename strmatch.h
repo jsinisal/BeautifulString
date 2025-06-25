@@ -8,7 +8,7 @@
 
 #include <Python.h>
 
-//PyObject* strmatch(PyObject *self, PyObject *args, PyObject *kwargs);
-PyObject* strmatch(PyObject *self, PyObject *args);
+PyObject* strmatch(PyObject *self, PyObject *args, PyObject *kwargs);
+//PyObject* strmatch(PyObject *self, PyObject *args);
 
 #endif //STRMATCH_H

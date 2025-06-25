@@ -8,7 +8,9 @@ add_definitions(-DNDEBUG)
 set(Python_ROOT_DIR "C:/Users/Juha/AppData/Local/Programs/Python/Python313/")  # Customize accordingly
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 
-add_library(BeautifulString MODULE library.c strscan.c strfetch.c strmatch.c)
+add_library(BeautifulString MODULE library.c strscan.c strfetch.c strmatch.c strsearch.c
+        strmatch_internal.h
+        strmatch_internal.c)
 
 target_include_directories(BeautifulString PRIVATE ${Python3_INCLUDE_DIRS})
 target_link_libraries(BeautifulString PRIVATE ${Python3_LIBRARIES})

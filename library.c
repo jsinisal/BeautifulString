@@ -5,12 +5,15 @@
 #include "strscan.h"
 #include "strfetch.h"
 #include "strmatch.h"
+#include "strsearch.h"
+
 
 
 static PyMethodDef BeautifulStringMethods[] = {
     {"strfetch", strfetch, METH_VARARGS, "Fetch substrings using slice definitions."},
     {"strscan", (PyCFunction)strscan, METH_VARARGS | METH_KEYWORDS,"Parse input_str using format_str. Supports named fields and return_type (list, tuple, dict, tuple_list)."},
-    {"strmatch", strmatch, METH_VARARGS, "Extracting fields from the matching string."},
+    {"strmatch", (PyCFunction)strmatch, METH_VARARGS | METH_KEYWORDS, "Extracting fields from the matching string."},
+    {"strsearch", (PyCFunction)strsearch, METH_VARARGS | METH_KEYWORDS, "Search for pattern match inside a string."},
     {NULL, NULL, 0, NULL}
 };
 
