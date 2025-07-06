@@ -1,3 +1,5 @@
+// Part of BeautifulString python module
+
 #include "strmatch.h"
 #include "strmatch_internal.h"
 #include <stdio.h>

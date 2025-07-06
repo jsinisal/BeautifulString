@@ -1,6 +1,7 @@
 //
 // Created by Juha on 25.6.2025.
 //
+// Part of BeautifulString python module
 
 #ifndef STRSEARCH_INTERNAL_H
 #define STRSEARCH_INTERNAL_H
