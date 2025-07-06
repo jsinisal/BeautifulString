@@ -11,6 +11,7 @@
 #include "strvalidate.h"
 #include "strparse.h"
 #include "bstring.h"
+#include "beanalyzer.h"
 
 static PyMethodDef BeautifulStringMethods[] = {
     {"strfetch", strfetch, METH_VARARGS, "Fetch substrings using slice definitions."},
@@ -31,12 +32,14 @@ static struct PyModuleDef BeautifulString = {
 };
 
 
-PyMODINIT_FUNC
-PyInit_BeautifulString(void) {
+PyMODINIT_FUNC PyInit_BeautifulString(void) {
     PyObject *m;
 
     // Finalize the BString type
     if (PyType_Ready(&BStringType) < 0)
+        return NULL;
+
+    if (PyType_Ready(&BeautifulAnalyzerType) < 0)
         return NULL;
 
     // Finalize the BStringIter type
@@ -56,11 +59,14 @@ PyInit_BeautifulString(void) {
         return NULL;
     }
 
+    // Add the new BeautifulAnalyzer type
+    Py_INCREF(&BeautifulAnalyzerType);
+    if (PyModule_AddObject(m, "BeautifulAnalyzer", (PyObject *)&BeautifulAnalyzerType) < 0) {
+        Py_DECREF(&BStringType);
+        Py_DECREF(&BeautifulAnalyzerType);
+        Py_DECREF(m);
+        return NULL;
+    }
+
     return m;
 }
-
-/*
-PyMODINIT_FUNC PyInit_BeautifulString(void) {
-    return PyModule_Create(&BeautifulString);
-}
-*/
