@@ -2,89 +2,143 @@
 // Created by sinj on 27/06/2025.
 //
 
-#include <ctype.h>
+#include "strvalidate_match.h"
 #include <string.h>
-#include "starvalidate_match.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <ctype.h>
 
-int parse_constraints(const char *format, int *min_val, int *max_val) {
-    *min_val = -1;
-    *max_val = -1;
-
-    const char *p = strstr(format, "(");
-    if (!p) return 0;
-
-    const char *end = strstr(p, ")");
-    if (!end) return 0;
-
-    char constraint[128];
-    strncpy(constraint, p + 1, end - p - 1);
-    constraint[end - p - 1] = '\0';
-
-    char *token = strtok(constraint, ",");
-    while (token) {
-        if (strncmp(token, "min=", 4) == 0) {
-            *min_val = atoi(token + 4);
-        } else if (strncmp(token, "max=", 4) == 0) {
-            *max_val = atoi(token + 4);
+// Helper to skip over expected literal
+static int match_literal(const char **s_ptr, const char **f_ptr) {
+    const char *s = *s_ptr;
+    const char *f = *f_ptr;
+    while (*f && *f != '%') {
+        if (isspace((unsigned char)*f)) {
+            while (isspace((unsigned char)*s)) s++;
+            while (isspace((unsigned char)*f)) f++;
+        } else {
+            if (*s != *f) return 0;
+            s++;
+            f++;
         }
-        token = strtok(NULL, ",");
     }
-
+    *s_ptr = s;
+    *f_ptr = f;
     return 1;
 }
 
-int strvalidate_match(const char *input, const char *format) {
-    const char *p_fmt = format;
-    const char *p_in = input;
+// Try to match specifier value (basic validation)
+static int match_specifier(const char **s_ptr, const char **f_ptr) {
+    const char *s = *s_ptr;
+    const char *f = *f_ptr;
 
-    while (*p_fmt && *p_in) {
-        if (*p_fmt == '%') {
-            p_fmt++;
-            int type = 0;
-            int min_val = -1, max_val = -1;
+    // Skip type specifier and move to after field name
+    char type = *f;
+    if (type == 'l' && *(f + 1) == 'f') {
+        type = 'f';
+        f += 2;
+    } else {
+        f++;
+    }
 
-            if (*p_fmt == 'd') {
-                type = 1;
-                parse_constraints(p_fmt, &min_val, &max_val);
-            } else if (*p_fmt == 's') {
-                type = 2;
-            } else if (*p_fmt == 'w') {
-                type = 3;
+    // Skip optional named field like (age)
+    if (*f == '(') {
+        while (*f && *f != ')') f++;
+        if (*f == ')') f++;
+    }
+
+    while (isspace((unsigned char)*s)) s++;
+
+    int n = 0;  // bytes consumed
+
+    switch (type) {
+        case 'd': {
+            int tmp;
+            if (sscanf(s, "%d%n", &tmp, &n) == 1) {
+                *s_ptr += n;
+                *f_ptr = f;
+                return 1;
             }
-
-            // Skip past specifier and any constraint text
-            while (*p_fmt && *p_fmt != ' ' && *p_fmt != '%' && *p_fmt != ':' && *p_fmt != '\0') {
-                if (*p_fmt == ')') {
-                    p_fmt++;
-                    break;
+            break;
+        }
+        case 'u': {
+            unsigned int tmp;
+            if (sscanf(s, "%u%n", &tmp, &n) == 1) {
+                *s_ptr += n;
+                *f_ptr = f;
+                return 1;
+            }
+            break;
+        }
+        case 'f': {
+            float tmp;
+            if (sscanf(s, "%f%n", &tmp, &n) == 1) {
+                *s_ptr += n;
+                *f_ptr = f;
+                return 1;
+            }
+            break;
+        }
+        case 'x': {
+            unsigned int tmp;
+            if (sscanf(s, "%x%n", &tmp, &n) == 1) {
+                *s_ptr += n;
+                *f_ptr = f;
+                return 1;
+            }
+            break;
+        }
+        case 's': {
+            if (*s == '"') {
+                s++;
+                while (*s && *s != '"') {
+                    if (*s == '\\' && *(s + 1)) s++;  // skip escape
+                    s++;
                 }
-                p_fmt++;
+                if (*s == '"') {
+                    *s_ptr = s + 1;
+                    *f_ptr = f;
+                    return 1;
+                }
+            } else {
+                const char *start = s;
+                while (*s && !isspace((unsigned char)*s)) s++;
+                if (s > start) {
+                    *s_ptr = s;
+                    *f_ptr = f;
+                    return 1;
+                }
             }
+            break;
+        }
+        case 'w': {
+            const char *start = s;
+            while (isalnum((unsigned char)*s)) s++;
+            if (s > start) {
+                *s_ptr = s;
+                *f_ptr = f;
+                return 1;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return 0;
+}
 
-            if (type == 1) {
-                char num_buf[32];
-                int i = 0;
-                while (isdigit(*p_in) && i < 31) {
-                    num_buf[i++] = *p_in++;
-                }
-                num_buf[i] = '\0';
-                int value = atoi(num_buf);
-                if ((min_val != -1 && value < min_val) || (max_val != -1 && value > max_val)) {
-                    return 0;
-                }
-            } else if (type == 2) {
-                while (*p_in && !isspace(*p_in)) p_in++;
-            } else if (type == 3) {
-                while (*p_in && (isalnum(*p_in) || *p_in == '_')) p_in++;
-            }
-        } else {
-            if (*p_fmt != *p_in) {
-                return 0;
-            }
-            p_fmt++;
-            p_in++;
+int strvalidate_match(const char *s, const char *f) {
+    while (*f) {
+        if (!match_literal(&s, &f)) return 0;
+
+        if (*f == '%') {
+            f++;
+            const char *specifier = f;
+            if (!match_specifier(&s, &specifier)) return 0;
+            f = specifier;
         }
     }
 
-    return *p_fmt == '\0';
+    // while (isspace((unsigned char)*s)) s++;
+    return *s == '\0';
 }
