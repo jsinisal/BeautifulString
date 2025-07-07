@@ -63,6 +63,50 @@ for fruit in b:
     print(fruit.upper())
 ---
 
+# BeautifulAnalyzer
+
+`BeautifulAnalyzer` is a high-performance Python class, written in C, for calculating a suite of advanced statistics and metrics from a body of text. It is designed to be fast, efficient, and easy to use, accepting various text formats as input.
+
+It is part of the `BeautifulString` library.
+
+***
+
+## Features
+
+* **Basic Counts**: Instantly get character, word, and sentence counts.
+* **Lexical Diversity**: Calculate the number of unique words and the type-token ratio.
+* **Readability Score**: Determine the complexity of the text using standard formulas like Flesch-Kincaid.
+* **Frequency Analysis**: Generate sorted word frequency distributions and n-grams.
+* **Flexible Input**: Initializes from a plain string, a list/tuple of strings, or a `BString` object.
+* **High Performance**: C-level implementation with result caching for fast, repeated access to statistics.
+
+***
+
+## Installation
+
+`BeautifulAnalyzer` is included in the `BeautifulString` library. Please follow the main project's instructions for building and installing the library from source using CMake.
+
+***
+
+## API and Usage
+
+### Initialization
+
+The analyzer can be initialized with a plain string, a list/tuple of strings, or a `BString` object. The input is joined into a single text block for analysis.
+
+```python
+from BeautifulString import BString, BeautifulAnalyzer
+
+# Initialize with a plain string using a keyword argument
+analyzer_str = BeautifulAnalyzer(text="This is a sentence. This is another.")
+
+# Initialize with a list of strings
+analyzer_list = BeautifulAnalyzer(text=["First part.", "Second part."])
+
+# Initialize with a BString object
+b = BString("First BString part.", "Second BString part.")
+analyzer_bstring = BeautifulAnalyzer(text=b)
+
 ## New String Utility Functions
 
 The following C-accelerated Python functions extend BeautifulString with powerful parsing, scanning, validating, and formatting capabilities:
