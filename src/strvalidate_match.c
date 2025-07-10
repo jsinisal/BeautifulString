@@ -8,15 +8,21 @@
 #include <stdio.h>
 #include <ctype.h>
 
-// Helper to skip over expected literal
+#if defined(_WIN32)
+#define strncasecmp _strnicmp
+#endif
+
+// Helper to skip over expected literal text and whitespace
 static int match_literal(const char **s_ptr, const char **f_ptr) {
     const char *s = *s_ptr;
     const char *f = *f_ptr;
     while (*f && *f != '%') {
         if (isspace((unsigned char)*f)) {
+            // Flexible whitespace matching
             while (isspace((unsigned char)*s)) s++;
             while (isspace((unsigned char)*f)) f++;
         } else {
+            // Exact character match
             if (*s != *f) return 0;
             s++;
             f++;
@@ -27,118 +33,121 @@ static int match_literal(const char **s_ptr, const char **f_ptr) {
     return 1;
 }
 
-// Try to match specifier value (basic validation)
+// Helper to match a single format specifier
 static int match_specifier(const char **s_ptr, const char **f_ptr) {
     const char *s = *s_ptr;
     const char *f = *f_ptr;
+    char *endptr = (char *)s; // Initialize to current position
 
-    // Skip type specifier and move to after field name
     char type = *f;
-    if (type == 'l' && *(f + 1) == 'f') {
-        type = 'f';
-        f += 2;
-    } else {
-        f++;
-    }
+    f++; // Advance format pointer past the specifier character
 
     // Skip optional named field like (age)
     if (*f == '(') {
+        const char *start_paren = f;
         while (*f && *f != ')') f++;
-        if (*f == ')') f++;
+        if (*f == ')') {
+            f++; // Skip ')' only if found
+        } else {
+            f = start_paren; // Malformed, backtrack
+        }
+    }
+
+    // Skip leading whitespace in the source string before matching a value
+    while (isspace((unsigned char)*s)) s++;
+
+    const char *s_before_match = s;
+
+    switch (type) {
+        case 'd': strtol(s, &endptr, 10); break;
+        case 'u': strtoul(s, &endptr, 10); break;
+        case 'x': strtol(s, &endptr, 16); break;
+        case 'f': strtod(s, &endptr); break;
+        case 'b': {
+            if (strncasecmp(s, "true", 4) == 0) s += 4;
+            else if (strncasecmp(s, "false", 5) == 0) s += 5;
+            else if (*s == '1') s += 1;
+            else if (*s == '0') s += 1;
+            endptr = (char*)s;
+            break;
+        }
+        case 's': {
+            if (*s == '"' || *s == '\'') {
+                char opening_quote = *s;
+                s++;
+                while (*s && *s != opening_quote) {
+                    if (*s == '\\' && *(s + 1)) s++;
+                    s++;
+                }
+                // --- THE FIX IS HERE ---
+                if (*s == opening_quote) {
+                    s++; // Consume matching closing quote
+                } else {
+                    // Unclosed quote, this is a failure.
+                    s = s_before_match; // Reset pointer to signal no match
+                }
+            } else { // Unquoted, non-whitespace string
+                while (*s && !isspace((unsigned char)*s)) s++;
+            }
+            endptr = (char*)s;
+            break;
+        }
+        case 'w': { // Alphanumeric word
+            while (isalnum((unsigned char)*s)) s++;
+            endptr = (char*)s;
+            break;
+        }
+        case '[': { // Character sets
+            int negated = 0;
+            char set[256] = {0};
+
+            if (*f == '^') {
+                negated = 1;
+                f++;
+            }
+
+            while (*f && *f != ']') {
+                set[(unsigned char)*f] = 1;
+                f++;
+            }
+
+            if (*f != ']') return 0; // Malformed set
+            f++; // Consume the ']'
+
+            while (*s) {
+                if (negated) {
+                    if (set[(unsigned char)*s]) break;
+                } else {
+                    if (!set[(unsigned char)*s]) break;
+                }
+                s++;
+            }
+            endptr = (char*)s;
+            break;
+        }
+        default: return 0; // Unknown specifier
+    }
+
+    if (endptr > s_before_match) {
+        *s_ptr = endptr;
+        *f_ptr = f;
+        return 1;
+    }
+
+    return 0;
+}
+
+// Main validation function
+int strvalidate_match(const char *s, const char *f) {
+    while (*f) {
+        if (!match_literal(&s, &f)) return 0;
+        if (*f == '%') {
+            f++;
+            if (!match_specifier(&s, &f)) return 0;
+        }
     }
 
     while (isspace((unsigned char)*s)) s++;
 
-    int n = 0;  // bytes consumed
-
-    switch (type) {
-        case 'd': {
-            int tmp;
-            if (sscanf(s, "%d%n", &tmp, &n) == 1) {
-                *s_ptr += n;
-                *f_ptr = f;
-                return 1;
-            }
-            break;
-        }
-        case 'u': {
-            unsigned int tmp;
-            if (sscanf(s, "%u%n", &tmp, &n) == 1) {
-                *s_ptr += n;
-                *f_ptr = f;
-                return 1;
-            }
-            break;
-        }
-        case 'f': {
-            float tmp;
-            if (sscanf(s, "%f%n", &tmp, &n) == 1) {
-                *s_ptr += n;
-                *f_ptr = f;
-                return 1;
-            }
-            break;
-        }
-        case 'x': {
-            unsigned int tmp;
-            if (sscanf(s, "%x%n", &tmp, &n) == 1) {
-                *s_ptr += n;
-                *f_ptr = f;
-                return 1;
-            }
-            break;
-        }
-        case 's': {
-            if (*s == '"') {
-                s++;
-                while (*s && *s != '"') {
-                    if (*s == '\\' && *(s + 1)) s++;  // skip escape
-                    s++;
-                }
-                if (*s == '"') {
-                    *s_ptr = s + 1;
-                    *f_ptr = f;
-                    return 1;
-                }
-            } else {
-                const char *start = s;
-                while (*s && !isspace((unsigned char)*s)) s++;
-                if (s > start) {
-                    *s_ptr = s;
-                    *f_ptr = f;
-                    return 1;
-                }
-            }
-            break;
-        }
-        case 'w': {
-            const char *start = s;
-            while (isalnum((unsigned char)*s)) s++;
-            if (s > start) {
-                *s_ptr = s;
-                *f_ptr = f;
-                return 1;
-            }
-            break;
-        }
-        default:
-            break;
-    }
-    return 0;
-}
-
-int strvalidate_match(const char *s, const char *f) {
-    while (*f) {
-        if (!match_literal(&s, &f)) return 0;
-
-        if (*f == '%') {
-            f++;
-            const char *specifier = f;
-            if (!match_specifier(&s, &specifier)) return 0;
-            f = specifier;
-        }
-    }
-
-    // while (isspace((unsigned char)*s)) s++;
     return *s == '\0';
 }
