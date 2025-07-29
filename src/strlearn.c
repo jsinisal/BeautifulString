@@ -9,22 +9,38 @@
 #include <ctype.h>
 #include "strlearn.h"
 
-typedef struct {
-    char* value;
-    size_t length;
-} Token;
+#include <Python.h>
+#include <ctype.h>
+#include "strlearn.h"
 
-typedef struct {
-    Token* tokens;
-    size_t count;
-} TokenList;
+// Define token types
+typedef enum {
+    TOKEN_TYPE_INT,
+    TOKEN_TYPE_FLOAT,
+    TOKEN_TYPE_STRING
+} TokenType;
 
-enum TokenType { TYPE_INT, TYPE_FLOAT, TYPE_STRING };
+// Helper to infer the type of a single token string
+static TokenType infer_type(PyObject *token_str) {
+    const char* s = PyUnicode_AsUTF8(token_str);
+    int has_dot = 0;
+    if (!s || s[0] == '\0') return TOKEN_TYPE_STRING; // Empty string is a string
 
-static TokenList tokenize(const char* str) {
-    TokenList list = { NULL, 0 };
-    size_t capacity = 8;
-    list.tokens = PyMem_Malloc(capacity * sizeof(Token));
+    for (int i = 0; s[i]; ++i) {
+        if (isdigit(s[i])) continue;
+        if (s[i] == '.' && !has_dot) {
+            has_dot = 1;
+            continue;
+        }
+        return TOKEN_TYPE_STRING;
+    }
+    return has_dot ? TOKEN_TYPE_FLOAT : TOKEN_TYPE_INT;
+}
+
+// Helper to tokenize a single string into a Python list of strings
+static PyObject* tokenize_string(const char* str) {
+    PyObject* token_list = PyList_New(0);
+    if (!token_list) return NULL;
 
     size_t i = 0;
     while (str[i]) {
@@ -42,111 +58,95 @@ static TokenList tokenize(const char* str) {
 
         size_t len = i - start;
         if (len > 0) {
-            if (list.count == capacity) {
-                capacity *= 2;
-                list.tokens = PyMem_Realloc(list.tokens, capacity * sizeof(Token));
+            PyObject *token = PyUnicode_FromStringAndSize(&str[start], len);
+            if (!token || PyList_Append(token_list, token) != 0) {
+                Py_XDECREF(token);
+                Py_DECREF(token_list);
+                return NULL;
             }
-
-            list.tokens[list.count].value = PyMem_Malloc(len + 1);
-            memcpy(list.tokens[list.count].value, &str[start], len);
-            list.tokens[list.count].value[len] = '\0';
-            list.tokens[list.count].length = len;
-            list.count++;
+            Py_DECREF(token);
         }
-
         if (str[i] == '"') i++;
     }
-
-    return list;
+    return token_list;
 }
 
-static enum TokenType infer_type(const char* s) {
-    int has_dot = 0;
-    for (int i = 0; s[i]; ++i) {
-        if (isdigit(s[i])) continue;
-        if (s[i] == '.' && !has_dot) {
-            has_dot = 1;
-            continue;
-        }
-        return TYPE_STRING;
-    }
-    return has_dot ? TYPE_FLOAT : TYPE_INT;
-}
-
-PyObject* strlearn(PyObject* self, PyObject* args) {
+// Main strlearn function
+PyObject* strlearn(PyObject* self, PyObject* args, PyObject* kwds) {
     PyObject* input_list;
-    if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &input_list)) {
-        return PyErr_Format(PyExc_TypeError, "Expected a list of strings.");
+    const char* format = "list"; // DEFAULT is now "list"
+    static char *kwlist[] = {"list_of_strings", "format", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|s", kwlist,
+                                     &PyList_Type, &input_list, &format)) {
+        return NULL;
     }
 
-    Py_ssize_t list_size = PyList_Size(input_list);
-    if (list_size < 2) {
-        return PyErr_Format(PyExc_ValueError, "At least two example strings are required.");
-    }
 
-    TokenList* rows = PyMem_Malloc(list_size * sizeof(TokenList));
-    for (Py_ssize_t i = 0; i < list_size; ++i) {
+    Py_ssize_t num_rows = PyList_Size(input_list);
+    if (num_rows < 1) {
+        return PyList_New(0);
+    }
+    PyObject *tokenized_rows = PyList_New(num_rows);
+    if (!tokenized_rows) return NULL;
+    for (Py_ssize_t i = 0; i < num_rows; ++i) {
         PyObject* item = PyList_GetItem(input_list, i);
         if (!PyUnicode_Check(item)) {
             PyErr_SetString(PyExc_TypeError, "All elements must be strings.");
-            goto cleanup_rows;
+            Py_DECREF(tokenized_rows);
+            return NULL;
         }
-        const char* str = PyUnicode_AsUTF8(item);
-        rows[i] = tokenize(str);
+        PyObject* tokens = tokenize_string(PyUnicode_AsUTF8(item));
+        if (!tokens) { Py_DECREF(tokenized_rows); return NULL; }
+        PyList_SET_ITEM(tokenized_rows, i, tokens);
     }
-
-    size_t column_count = rows[0].count;
-    enum TokenType* types = PyMem_Malloc(column_count * sizeof(enum TokenType));
-
-    for (size_t col = 0; col < column_count; ++col) {
-        types[col] = infer_type(rows[0].tokens[col].value);
-        for (Py_ssize_t row = 1; row < list_size; ++row) {
-            if (col >= rows[row].count) {
-                types[col] = TYPE_STRING;
+    PyObject* first_row = PyList_GetItem(tokenized_rows, 0);
+    Py_ssize_t num_cols = PyList_Size(first_row);
+    TokenType* col_types = PyMem_Malloc(num_cols * sizeof(TokenType));
+    if (!col_types) { Py_DECREF(tokenized_rows); return PyErr_NoMemory(); }
+    for (Py_ssize_t col = 0; col < num_cols; ++col) {
+        col_types[col] = infer_type(PyList_GetItem(first_row, col));
+        for (Py_ssize_t row = 1; row < num_rows; ++row) {
+            PyObject* current_row = PyList_GetItem(tokenized_rows, row);
+            if (col >= PyList_Size(current_row) || col_types[col] == TOKEN_TYPE_STRING) {
+                col_types[col] = TOKEN_TYPE_STRING;
                 break;
             }
-            enum TokenType t = infer_type(rows[row].tokens[col].value);
-            if (t != types[col]) {
-                types[col] = TYPE_STRING;
-                break;
+            if (infer_type(PyList_GetItem(current_row, col)) != col_types[col]) {
+                col_types[col] = TOKEN_TYPE_STRING;
             }
         }
     }
+    Py_DECREF(tokenized_rows);
 
-    PyObject* format_str = PyUnicode_FromString("");
-    for (size_t i = 0; i < column_count; ++i) {
-        const char* fmt = NULL;
-        switch (types[i]) {
-            case TYPE_INT: fmt = "%%d(field%zu)"; break;
-            case TYPE_FLOAT: fmt = "%%f(field%zu)"; break;
-            case TYPE_STRING: fmt = "%%s(field%zu)"; break;
+    // --- Build the result based on the 'format' argument ---
+    PyObject* result = NULL;
+    if (strcmp(format, "list") == 0) { // CHECK is now for "list"
+        result = PyList_New(num_cols);
+        for (Py_ssize_t i = 0; i < num_cols; ++i) {
+            const char* type_name = "string";
+            if (col_types[i] == TOKEN_TYPE_INT) type_name = "int";
+            else if (col_types[i] == TOKEN_TYPE_FLOAT) type_name = "float";
+            PyList_SET_ITEM(result, i, PyUnicode_FromString(type_name));
         }
-        PyObject* part = PyUnicode_FromFormat(fmt, i);
-        PyUnicode_Append(&format_str, part);
-        Py_DECREF(part);
-        if (i + 1 < column_count) {
-            PyUnicode_Append(&format_str, PyUnicode_FromString(" "));
+    } else if (strcmp(format, "c-style") == 0) { // CHECK is now "c-style"
+        PyObject* parts = PyList_New(0);
+        for (Py_ssize_t i = 0; i < num_cols; ++i) {
+            const char* fmt = "%%s(field%zd)";
+            if (col_types[i] == TOKEN_TYPE_INT) fmt = "%%d(field%zd)";
+            else if (col_types[i] == TOKEN_TYPE_FLOAT) fmt = "%%f(field%zd)";
+            PyObject* part = PyUnicode_FromFormat(fmt, i + 1);
+            PyList_Append(parts, part);
+            Py_DECREF(part);
         }
+        PyObject *sep = PyUnicode_FromString(" ");
+        result = PyUnicode_Join(sep, parts);
+        Py_DECREF(sep);
+        Py_DECREF(parts);
+    } else {
+        PyErr_SetString(PyExc_ValueError, "format must be 'list' or 'c-style'");
     }
 
-    for (Py_ssize_t r = 0; r < list_size; ++r) {
-        for (size_t t = 0; t < rows[r].count; ++t) {
-            PyMem_Free(rows[r].tokens[t].value);
-        }
-        PyMem_Free(rows[r].tokens);
-    }
-    PyMem_Free(rows);
-    PyMem_Free(types);
-
-    return format_str;
-
-cleanup_rows:
-    for (Py_ssize_t r = 0; r < list_size; ++r) {
-        for (size_t t = 0; t < rows[r].count; ++t) {
-            PyMem_Free(rows[r].tokens[t].value);
-        }
-        PyMem_Free(rows[r].tokens);
-    }
-    PyMem_Free(rows);
-    return NULL;
+    PyMem_Free(col_types);
+    return result;
 }
