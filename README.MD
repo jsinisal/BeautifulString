@@ -41,11 +41,29 @@ After a successful build, the Python extension module (e.g., `BeautifulString.py
 
 ## Usage & API
 
-### `BString` Class
+# BString Class
 
-A mutable sequence container for strings.
+`BString` is a high-performance, mutable container for holding an ordered sequence of strings. ⛓️ It's written as a Python C extension to provide maximum speed for data-heavy tasks, while offering a rich, Pythonic API.
 
-#### Initialization & Basic Operations
+It's designed for efficient data manipulation, transformation, and serialization to and from various formats. `BString` is a core component of the `BeautifulString` library.
+
+***
+## Features
+
+* **High-Performance**: Core logic is written in C for speed.
+* **Full Mutability**: Supports `.append()`, `.insert()`, `.pop()`, `.remove()`, and item assignment.
+* **Complete Slicing**: Full `list`-like slice support for getting, setting, and deleting.
+* **Rich Data Export**: Convert instances on-the-fly to `list`, `tuple`, `dict`, `JSON`, and highly configurable `CSV` formats.
+* **Advanced File I/O**: Robust methods for reading/writing text files and multi-line `CSV` files with header support.
+* **Powerful Transformations**: Includes `.map()`, `.filter()`, `.extend()`, and a `.transform_chars()` method for bulk character removal/retention.
+* **Linked-List Navigation**: Unique `.head`, `.tail`, `.next`, and `.prev` properties for cursor-style iteration.
+
+***
+## API and Usage
+
+### Initialization & Basic Operations
+
+`BString` is initialized with one or more string arguments. It behaves like a standard Python sequence.
 
 ```python
 from BeautifulString import BString
@@ -56,48 +74,42 @@ print(b)
 # Output: ['apple', 'banana', 'cherry']
 
 # Get length
-print(len(b)) # Output: 3
+print(f"Length: {len(b)}") # Output: 3
 
 # Iteration
 for fruit in b:
     print(fruit.upper())
----
-
+    
 # BeautifulAnalyzer
 
-`BeautifulAnalyzer` is a high-performance Python class, written in C, for calculating a suite of advanced statistics and metrics from a body of text. It is designed to be fast, efficient, and easy to use, accepting various text formats as input.
+`# BeautifulAnalyzer
+
+`BeautifulAnalyzer` is a high-performance Python class, written in C, for calculating a suite of advanced statistics and metrics from a body of text. It's designed to be fast, efficient, and easy to use, accepting various text formats as input.
 
 It is part of the `BeautifulString` library.
 
 ***
-
 ## Features
 
 * **Basic Counts**: Instantly get character, word, and sentence counts.
-* **Lexical Diversity**: Calculate the number of unique words and the type-token ratio.
-* **Readability Score**: Determine the complexity of the text using standard formulas like Flesch-Kincaid.
-* **Frequency Analysis**: Generate sorted word frequency distributions and n-grams.
+* **Lexical Diversity**: Calculate the number of unique words and the average sentence length.
+* **Readability Score**: Determine the complexity of the text using the Flesch-Kincaid Grade Level formula.
+* **Frequency Analysis**: Generate sorted word frequency distributions.
+* **N-gram Generation**: Create lists of bigrams, trigrams, and other n-grams.
 * **Flexible Input**: Initializes from a plain string, a list/tuple of strings, or a `BString` object.
 * **High Performance**: C-level implementation with result caching for fast, repeated access to statistics.
 
 ***
-
-## Installation
-
-`BeautifulAnalyzer` is included in the `BeautifulString` library. Please follow the main project's instructions for building and installing the library from source using CMake.
-
-***
-
 ## API and Usage
 
 ### Initialization
 
-The analyzer can be initialized with a plain string, a list/tuple of strings, or a `BString` object. The input is joined into a single text block for analysis.
+The analyzer is initialized with a `text` keyword argument. The input is joined into a single text block for analysis.
 
 ```python
 from BeautifulString import BString, BeautifulAnalyzer
 
-# Initialize with a plain string using a keyword argument
+# Initialize with a plain string
 analyzer_str = BeautifulAnalyzer(text="This is a sentence. This is another.")
 
 # Initialize with a list of strings
@@ -150,7 +162,24 @@ Parses a structured string using format specifiers, returns a structured result.
 bs.strparse("Temp 36.6", "Temp %f", return_type="tuple")  # (36.6,)
 bs.strparse("X 100 Y 200", "X %d(x) Y %d(y)", return_type="tuple_list")
 ```
+# strlearn Function
 
+The `strlearn` function is a utility within the `BeautifulString` library that automatically analyzes a list of example strings to infer the underlying data types of their columns. It's a powerful tool for understanding the structure of semi-structured text data, like log files or simple reports, without needing to define a parser manually.
+
+***
+## Features
+
+* Learns column data types (**int**, **float**, **string**) from examples.
+* Tokenizes strings based on whitespace and quotes.
+* Handles ragged data (rows with different numbers of columns) by defaulting to the safest type (`string`).
+* Offers multiple output formats for flexibility.
+
+***
+## API and Usage
+
+### Signature
+```python
+BeautifulString.strlearn(list_of_strings, format='list')
 ---
 
 ## Return Types
