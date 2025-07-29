@@ -34,7 +34,167 @@ static PyObject *BString_get_head(BStringObject *self, void *closure);
 static PyObject *BString_get_tail(BStringObject *self, void *closure);
 static PyObject *BString_get_next(BStringObject *self, void *closure);
 static PyObject *BString_get_prev(BStringObject *self, void *closure);
+static PyObject *BString_move_next(BStringObject *self, PyObject *Py_UNUSED(args));
+static PyObject *BString_move_prev(BStringObject *self, PyObject *Py_UNUSED(args));
+static PyObject *BString_move_to_head(BStringObject *self, PyObject *Py_UNUSED(args));
+static PyObject *BString_move_to_tail(BStringObject *self, PyObject *Py_UNUSED(args));
 
+
+
+// ============================================================================
+// BString .comtains and .unique
+// ============================================================================
+
+// BString .unique method
+static PyObject *BString_unique(BStringObject *self, PyObject *Py_UNUSED(args)) {
+    // Create a new BString for the results
+    BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+    if (!result) return NULL;
+
+    // Use a Python Set to efficiently track seen strings
+    PyObject *seen_set = PySet_New(NULL);
+    if (!seen_set) {
+        Py_DECREF(result);
+        return NULL;
+    }
+
+    BStringNode *current = self->head;
+    while (current) {
+        // Check if the string is already in our set of seen strings
+        int contains = PySet_Contains(seen_set, current->str);
+
+        if (contains < 0) { // An error occurred
+            Py_DECREF(result);
+            Py_DECREF(seen_set);
+            return NULL;
+        }
+
+        // If the string has not been seen before...
+        if (contains == 0) {
+            // ...add it to the set...
+            if (PySet_Add(seen_set, current->str) != 0) {
+                Py_DECREF(result);
+                Py_DECREF(seen_set);
+                return NULL;
+            }
+            // ...and append it to our result BString.
+            BString_append(result, current->str);
+        }
+        current = current->next;
+    }
+
+    Py_DECREF(seen_set); // Clean up the set
+    return (PyObject *)result;
+}
+
+// BString .contains method
+static PyObject *BString_contains(BStringObject *self, PyObject *args, PyObject *kwds) {
+    const char *substring_cstr;
+    int case_sensitive = 1; // Default to True
+    static char *kwlist[] = {"substring", "case_sensitive", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|p", kwlist,
+                                     &substring_cstr, &case_sensitive)) {
+        return NULL;
+                                     }
+
+    PyObject *substring_obj = PyUnicode_FromString(substring_cstr);
+    if (!substring_obj) return NULL;
+
+    BStringNode *current = self->head;
+    while (current) {
+        PyObject *target_str = current->str;
+        PyObject *target_substr = substring_obj;
+        int found = 0;
+
+        // For case-insensitive, create temporary lowercase versions
+        if (!case_sensitive) {
+            target_str = PyObject_CallMethod(current->str, "lower", NULL);
+            target_substr = PyObject_CallMethod(substring_obj, "lower", NULL);
+        }
+
+        if (target_str && target_substr) {
+            if (PyUnicode_Find(target_str, target_substr, 0, PyUnicode_GET_LENGTH(target_str), 1) != -1) {
+                found = 1;
+            }
+        }
+
+        // Clean up temporary objects if they were created
+        if (!case_sensitive) {
+            Py_XDECREF(target_str);
+            Py_XDECREF(target_substr);
+        }
+
+        if (found || PyErr_Occurred()) {
+            Py_DECREF(substring_obj);
+            if (PyErr_Occurred()) return NULL;
+            Py_RETURN_TRUE;
+        }
+
+        current = current->next;
+    }
+
+    Py_DECREF(substring_obj);
+    Py_RETURN_FALSE;
+}
+
+// ============================================================================
+// BString .join and .split
+// ============================================================================
+
+
+// Add join method
+static PyObject *BString_join(BStringObject *self, PyObject *separator) {
+    if (!PyUnicode_Check(separator)) {
+        PyErr_SetString(PyExc_TypeError, "separator must be a string");
+        return NULL;
+    }
+
+    // First, convert the BString to a standard PyList for safety and compatibility.
+    PyObject *list = PyList_New(self->size);
+    if (!list) return NULL;
+
+    BStringNode *current = self->head;
+    for (Py_ssize_t i = 0; i < self->size; ++i) {
+        Py_INCREF(current->str);
+        PyList_SET_ITEM(list, i, current->str);
+        current = current->next;
+    }
+
+    // Now, join the standard list.
+    PyObject *result = PyUnicode_Join(separator, list);
+
+    Py_DECREF(list); // Clean up the temporary list.
+    return result;
+}
+
+// .split - this is class method
+static PyObject *BString_split(PyObject *type, PyObject *args, PyObject *kwds) {
+    PyObject *string_to_split;
+    const char *delimiter = NULL;
+    static char *kwlist[] = {"string", "delimiter", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|s", kwlist, &string_to_split, &delimiter)) {
+        return NULL;
+    }
+
+    // Call the string's own .split() method, which returns a PyList
+    PyObject *split_list = PyObject_CallMethod(string_to_split, "split", "z", delimiter);
+    if (!split_list) return NULL;
+
+    // Convert the list of strings to a tuple for the BString constructor call
+    PyObject *args_tuple = PyList_AsTuple(split_list);
+    Py_DECREF(split_list); // We are done with the list
+    if (!args_tuple) {
+        return NULL; // Failed to create tuple
+    }
+
+    // Create a new BString from the tuple of arguments
+    PyObject *result_bstring = PyObject_CallObject(type, args_tuple);
+    Py_DECREF(args_tuple); // We are done with the tuple
+
+    return result_bstring;
+}
 // ============================================================================
 // BString CSV FILE I/O
 // ============================================================================
@@ -683,6 +843,14 @@ static PyMethodDef BString_methods[] = {
     {"from_file", (PyCFunction)BString_from_file, METH_VARARGS | METH_CLASS,"Create a new BString from a line-delimited text file."},
     {"from_csv", (PyCFunction)BString_from_csv, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Create BString rows from a CSV file."},
     {"to_csv", (PyCFunction)BString_to_csv, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Save a list of BString rows to a CSV file."},
+    {"move_next", (PyCFunction)BString_move_next, METH_NOARGS, "Move cursor to the next item. Returns False if at the end."},
+    {"move_prev", (PyCFunction)BString_move_prev, METH_NOARGS, "Move cursor to the previous item. Returns False if at the beginning."},
+    {"move_to_head", (PyCFunction)BString_move_to_head, METH_NOARGS, "Reset the cursor to the first item."},
+    {"move_to_tail", (PyCFunction)BString_move_to_tail, METH_NOARGS, "Move the cursor to the last item."},
+    {"join", (PyCFunction)BString_join, METH_O, "Join elements into a single string with a separator."},
+    {"split", (PyCFunction)BString_split, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Create a BString by splitting a string."},
+    {"contains", (PyCFunction)BString_contains, METH_VARARGS | METH_KEYWORDS, "Check if any string in the BString contains a substring."},
+    {"unique", (PyCFunction)BString_unique, METH_NOARGS, "Return a new BString with duplicate strings removed."},
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
@@ -1545,105 +1713,59 @@ static PyMappingMethods BString_as_mapping = {
 };
 
 // ============================================================================
-// BString GETTERS (for head, tail, next, prev) - REVISED SECTION
+// BString NAVIGATION (REFACTORED)
 // ============================================================================
 
-static PyObject *BString_CopyWithCurrent(BStringObject *original, BStringNode *orig_target_current) {
-    if (!original) {
-        Py_RETURN_NONE;
-    }
-
-    // Step 1: Create a new BString and deep copy the entire linked list structure.
-    BStringObject *new_bstring = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-    if (!new_bstring) return NULL;
-
-    BStringNode *temp_node = original->head;
-    while(temp_node) {
-         BStringNode *new_node = new_BStringNode(temp_node->str);
-         if (!new_node) {
-             BString_dealloc(new_bstring);
-             return NULL;
-         }
-         if (!new_bstring->head) {
-             new_bstring->head = new_bstring->tail = new_node;
-         } else {
-             new_bstring->tail->next = new_node;
-             new_node->prev = new_bstring->tail;
-             new_bstring->tail = new_node;
-         }
-         new_bstring->size++;
-         temp_node = temp_node->next;
-    }
-
-    // Step 2: Find the equivalent node in the NEW list to set as 'current'.
-    BStringNode *orig_iter = original->head;
-    BStringNode *new_iter = new_bstring->head;
-    while(orig_iter) {
-        if (orig_iter == orig_target_current) {
-            new_bstring->current = new_iter;
-            break;
-        }
-        orig_iter = orig_iter->next;
-        new_iter = new_iter->next;
-    }
-
-    // If for some reason the target wasn't found, default to head.
-    if (!orig_iter) {
-        new_bstring->current = new_bstring->head;
-    }
-
-    return (PyObject *)new_bstring;
-}
-
-// The 'head' of a BString is its CURRENT item.
 static PyObject *BString_get_head(BStringObject *self, void *closure) {
-    // If current isn't set, default to the absolute head.
-    if (!self->current) {
-        self->current = self->head;
-    }
-    if (!self->current) {
-        Py_RETURN_NONE;
-    }
-    Py_INCREF(self->current->str);
-    return self->current->str;
+    if (!self->head) Py_RETURN_NONE;
+    Py_INCREF(self->head->str);
+    return self->head->str;
 }
 
-// The 'tail' of a BString is always the absolute last item.
 static PyObject *BString_get_tail(BStringObject *self, void *closure) {
-    if (!self->tail) {
-        Py_RETURN_NONE;
-    }
-    // Accessing tail should reset the 'current' pointer to the end.
-    self->current = self->tail;
+    if (!self->tail) Py_RETURN_NONE;
     Py_INCREF(self->tail->str);
     return self->tail->str;
 }
 
-// FINAL Getter for .next, using the new helper.
-static PyObject *BString_get_next(BStringObject *self, void *closure) {
-    if (!self->current || !self->current->next) {
-        Py_RETURN_NONE;
-    }
-    // Create a copy, telling it to set its 'current' to our 'next'.
-    return BString_CopyWithCurrent(self, self->current->next);
+static PyObject *BString_get_current(BStringObject *self, void *closure) {
+    if (!self->current) Py_RETURN_NONE;
+    Py_INCREF(self->current->str);
+    return self->current->str;
 }
 
-// FINAL Getter for .prev, using the new helper.
-static PyObject *BString_get_prev(BStringObject *self, void *closure) {
-    if (!self->current || !self->current->prev) {
-        Py_RETURN_NONE;
+// --- NEW METHODS for moving the cursor ---
+
+static PyObject *BString_move_next(BStringObject *self, PyObject *Py_UNUSED(args)) {
+    if (self->current && self->current->next) {
+        self->current = self->current->next;
+        Py_RETURN_TRUE;
     }
-    // Create a copy, telling it to set its 'current' to our 'prev'.
-    return BString_CopyWithCurrent(self, self->current->prev);
+    Py_RETURN_FALSE;
 }
 
+static PyObject *BString_move_prev(BStringObject *self, PyObject *Py_UNUSED(args)) {
+    if (self->current && self->current->prev) {
+        self->current = self->current->prev;
+        Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+}
 
-// Getters/Setters definition array - THIS REMAINS THE SAME
+static PyObject *BString_move_to_head(BStringObject *self, PyObject *Py_UNUSED(args)) {
+    self->current = self->head;
+    Py_RETURN_NONE;
+}
+
+static PyObject *BString_move_to_tail(BStringObject *self, PyObject *Py_UNUSED(args)) {
+    self->current = self->tail;
+    Py_RETURN_NONE;
+}
+
 static PyGetSetDef BString_getsetters[] = {
-    {"head", (getter)BString_get_head, NULL, "Current string in the sequence", NULL},
-    {"tail", (getter)BString_get_tail, NULL, "Last string in the collection", NULL},
-    {"next", (getter)BString_get_next, NULL, "New BString with pointer moved to the next element", NULL},
-    {"prev", (getter)BString_get_prev, NULL, "New BString with pointer moved to the previous element", NULL},
+    {"head", (getter)BString_get_head, NULL, "The first string in the sequence (read-only).", NULL},
+    {"tail", (getter)BString_get_tail, NULL, "The last string in the sequence (read-only).", NULL},
+    {"current", (getter)BString_get_current, NULL, "The string at the current cursor position (read-only).", NULL},
     {NULL}  /* Sentinel */
 };
 
