@@ -1,6 +1,7 @@
 //
 // Created by sinj on 28/06/2025.
-//
+// Implementation of BString class
+
 #define PY_SSIZE_T_CLEAN
 #include "bstring.h"
 #include "library.h"
@@ -19,6 +20,8 @@ static Py_ssize_t BString_length(BStringObject *self);
 static PyObject *BString_getitem(BStringObject *self, PyObject *key);
 static PyObject *BString_from_node(BStringNode *node);
 static PyObject* BString_extend(BStringObject *self, PyObject *args);
+static PyObject *BString_append(BStringObject *self, PyObject *obj);
+static PyObject *BString_transform_chars(BStringObject *self, PyObject *args, PyObject *kwds);
 static PyObject *BString_repeat(BStringObject *self, Py_ssize_t n);
 static PyObject *BString_filter(BStringObject *self, PyObject *args);
 static PyObject *BString_from_file(PyObject *type, PyObject *args);
@@ -226,103 +229,106 @@ static PyObject *BString_from_csv(PyObject *type, PyObject *args, PyObject *kwds
         return NULL;
     }
 
-    // --- Step 1: Get the 'open' function safely ---
-    PyObject *builtins = PyImport_ImportModule("builtins");
-    if (!builtins) return NULL;
-    PyObject *open_func = PyObject_GetAttrString(builtins, "open");
-    Py_DECREF(builtins);
-    if (!open_func) return NULL;
+    // --- Declare all Python objects at the top and initialize to NULL ---
+    PyObject *builtins = NULL, *open_func = NULL, *file_handle = NULL;
+    PyObject *csv_module = NULL, *reader_func = NULL, *reader_obj = NULL, *reader_iter = NULL;
+    PyObject *header_bstring = NULL, *data_rows_list = NULL, *return_value = NULL;
 
-    // --- Step 2: Open the file with UTF-8 encoding ---
+    // --- Step 1: Get 'open' and the file handle ---
+    builtins = PyImport_ImportModule("builtins");
+    if (!builtins) goto cleanup;
+    open_func = PyObject_GetAttrString(builtins, "open");
+    if (!open_func) goto cleanup;
+
     PyObject *open_args = Py_BuildValue("(ss)", filepath, "r");
     PyObject *open_kwargs = Py_BuildValue("{s:s}", "encoding", "utf-8");
-    PyObject *file_handle = PyObject_Call(open_func, open_args, open_kwargs);
-    Py_DECREF(open_func);
+    file_handle = PyObject_Call(open_func, open_args, open_kwargs);
     Py_DECREF(open_args);
     Py_DECREF(open_kwargs);
-    if (!file_handle) return NULL;
+    if (!file_handle) goto cleanup;
 
-    // --- Step 3: Create the CSV Reader ---
-    PyObject *csv_module = PyImport_ImportModule("csv");
-    if (!csv_module) { Py_DECREF(file_handle); return NULL; }
-    PyObject *reader_func = PyObject_GetAttrString(csv_module, "reader");
-    Py_DECREF(csv_module);
-    if (!reader_func) { Py_DECREF(file_handle); return NULL; }
+    // --- Step 2: Create the CSV Reader and its iterator ---
+    csv_module = PyImport_ImportModule("csv");
+    if (!csv_module) goto cleanup;
+    reader_func = PyObject_GetAttrString(csv_module, "reader");
+    if (!reader_func) goto cleanup;
+    reader_obj = PyObject_CallFunctionObjArgs(reader_func, file_handle, NULL);
+    if (!reader_obj) goto cleanup;
+    reader_iter = PyObject_GetIter(reader_obj);
+    if (!reader_iter) goto cleanup;
 
-    PyObject *reader_obj = PyObject_CallFunctionObjArgs(reader_func, file_handle, NULL);
-    Py_DECREF(reader_func);
-    Py_DECREF(file_handle);
-    if (!reader_obj) return NULL;
-
-    PyObject *reader_iter = PyObject_GetIter(reader_obj);
-    Py_DECREF(reader_obj);
-    if (!reader_iter) return NULL;
-
-    // --- Step 4: Process the header ---
-    PyObject *header_bstring = NULL;
+    // --- Step 3: Process header and data rows ---
     if (header) {
         PyObject *row_list = PyIter_Next(reader_iter);
         if (row_list) {
-            // FIX IS HERE: Convert list to tuple before calling
             PyObject *row_tuple = PyList_AsTuple(row_list);
             header_bstring = PyObject_CallObject(type, row_tuple);
-            Py_DECREF(row_tuple); // Clean up the new tuple
+            Py_DECREF(row_tuple);
             Py_DECREF(row_list);
-            if (!header_bstring) { Py_DECREF(reader_iter); return NULL; }
+            if (!header_bstring) goto cleanup;
         } else if (PyErr_Occurred()) {
-             Py_DECREF(reader_iter); return NULL;
+            goto cleanup;
         } else {
             header_bstring = PyObject_CallObject(type, PyTuple_New(0));
-            if (!header_bstring) { Py_DECREF(reader_iter); return NULL; }
+            if (!header_bstring) goto cleanup;
         }
     }
 
-    // --- Step 5: Process data rows ---
-    PyObject *data_rows_list = PyList_New(0);
-    if (!data_rows_list) { Py_XDECREF(header_bstring); Py_DECREF(reader_iter); return NULL; }
+    data_rows_list = PyList_New(0);
+    if (!data_rows_list) goto cleanup;
 
     PyObject *row_list;
     while ((row_list = PyIter_Next(reader_iter))) {
-        // FIX IS HERE: Convert list to tuple before calling
         PyObject *row_tuple = PyList_AsTuple(row_list);
         PyObject *row_bstring = PyObject_CallObject(type, row_tuple);
-        Py_DECREF(row_tuple); // Clean up the new tuple
+        Py_DECREF(row_tuple);
         Py_DECREF(row_list);
-        if (!row_bstring) {
-            Py_XDECREF(header_bstring);
-            Py_DECREF(data_rows_list);
-            Py_DECREF(reader_iter);
-            return NULL;
-        }
+        if (!row_bstring) goto cleanup;
         if (PyList_Append(data_rows_list, row_bstring) < 0) {
             Py_DECREF(row_bstring);
-            Py_XDECREF(header_bstring);
-            Py_DECREF(data_rows_list);
-            Py_DECREF(reader_iter);
-            return NULL;
+            goto cleanup;
         }
         Py_DECREF(row_bstring);
     }
-    Py_DECREF(reader_iter);
+
+    // --- Step 4: Prepare the final return value ---
+    if (header) {
+        return_value = PyTuple_Pack(2, header_bstring, data_rows_list);
+        header_bstring = NULL; // Tuple now owns reference.
+        data_rows_list = NULL; // Tuple now owns reference.
+    } else {
+        return_value = data_rows_list;
+        data_rows_list = NULL; // Return value now owns reference.
+    }
+
+cleanup:
+    // Clean up CSV-related objects first
+    Py_XDECREF(reader_iter);
+    Py_XDECREF(reader_obj);
+    Py_XDECREF(reader_func);
+    Py_XDECREF(csv_module);
+
+    // Explicitly close the file handle if it exists
+    if (file_handle) {
+        PyObject_CallMethod(file_handle, "close", NULL);
+        Py_XDECREF(file_handle);
+    }
+
+    // Clean up remaining objects
+    Py_XDECREF(builtins);
+    Py_XDECREF(open_func);
+    Py_XDECREF(header_bstring);
+    Py_XDECREF(data_rows_list);
 
     if (PyErr_Occurred()) {
-        Py_XDECREF(header_bstring);
-        Py_DECREF(data_rows_list);
+        Py_XDECREF(return_value);
         return NULL;
     }
 
-    // --- Step 6: Return the final result ---
-    if (header) {
-        PyObject* return_value = PyTuple_Pack(2, header_bstring, data_rows_list);
-        Py_DECREF(header_bstring);
-        Py_DECREF(data_rows_list);
-        return return_value;
-    } else {
-        return data_rows_list;
-    }
+    return return_value;
+
+    return return_value; // Return the successfully created object.
 }
-
-
 
 // Implements the .to_file() instance method
 static PyObject *BString_to_file(BStringObject *self, PyObject *args) {
@@ -406,6 +412,95 @@ static PyObject *BString_from_file(PyObject *type, PyObject *args) {
 
     return (PyObject *)new_bstring;
 }
+
+// transform_chars method
+static PyObject *BString_transform_chars(BStringObject *self, PyObject *args, PyObject *kwds) {
+    const char *characters;
+    const char *mode = "remove";
+    int inplace = 0; // Py_False
+    static char *kwlist[] = {"characters", "mode", "inplace", NULL};
+
+    // Use "s|sp" to parse: required string, optional string, optional boolean(predicate)
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|sp", kwlist,
+                                     &characters, &mode, &inplace)) {
+        return NULL;
+    }
+
+    // Validate the 'mode' argument
+    int is_remove_mode = (strcmp(mode, "remove") == 0);
+    if (!is_remove_mode && strcmp(mode, "keep") != 0) {
+        PyErr_SetString(PyExc_ValueError, "mode must be either 'remove' or 'keep'");
+        return NULL;
+    }
+
+    // --- Create a fast lookup set from the input characters ---
+    PyObject *char_set = PySet_New(PyUnicode_FromString(characters));
+    if (!char_set) return NULL;
+
+    BStringObject *target_bstring = self;
+    BStringObject *result_bstring = NULL;
+    BStringNode *target_node = NULL;
+
+    // If not in-place, create a new BString to hold the results
+    if (!inplace) {
+        result_bstring = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+        if (!result_bstring) {
+            Py_DECREF(char_set);
+            return NULL;
+        }
+        target_bstring = result_bstring;
+    }
+
+    // Iterate through the original BString's nodes
+    BStringNode *source_node = self->head;
+    while(source_node) {
+        PyObject *source_str = source_node->str;
+        PyObject *parts_list = PyList_New(0); // To build the new string
+        if (!parts_list) { Py_DECREF(char_set); Py_XDECREF(result_bstring); return NULL; }
+
+        Py_ssize_t len = PyUnicode_GET_LENGTH(source_str);
+        for (Py_ssize_t i = 0; i < len; ++i) {
+            // Create a temporary 1-char string for the set lookup
+            PyObject *single_char = PyUnicode_FromOrdinal(PyUnicode_READ_CHAR(source_str, i));
+            if (!single_char) { /* handle error */ }
+
+            int contains = PySet_Contains(char_set, single_char);
+            int keep_char = (is_remove_mode && !contains) || (!is_remove_mode && contains);
+
+            if (keep_char) {
+                PyList_Append(parts_list, single_char);
+            }
+            Py_DECREF(single_char);
+        }
+
+        PyObject *empty_str = PyUnicode_FromString("");
+        PyObject *transformed_str = PyUnicode_Join(empty_str, parts_list);
+        Py_DECREF(empty_str);
+        Py_DECREF(parts_list);
+
+        if (!transformed_str) { /* handle error */ }
+
+        if (inplace) {
+            Py_DECREF(source_node->str); // DECREF the old string
+            source_node->str = transformed_str; // new_BStringNode will INCREF
+        } else {
+            // Append the new transformed string to the result BString
+            BString_append((BStringObject*)target_bstring, transformed_str);
+            Py_DECREF(transformed_str);
+        }
+
+        source_node = source_node->next;
+    }
+
+    Py_DECREF(char_set);
+
+    if (inplace) {
+        Py_RETURN_NONE;
+    } else {
+        return (PyObject *)result_bstring;
+    }
+}
+
 
 // ============================================================================
 // BString MUTABILITY HELPERS
@@ -583,6 +678,7 @@ static PyMethodDef BString_methods[] = {
     { "insert", (PyCFunction)BString_insert, METH_VARARGS, "Insert string before index." },
     { "pop", (PyCFunction)BString_pop, METH_VARARGS, "Remove and return string at index (default last)." },
     { "remove", (PyCFunction)BString_remove, METH_O, "Remove first occurrence of a string." },
+    {"transform_chars", (PyCFunction)BString_transform_chars, METH_VARARGS | METH_KEYWORDS, "Remove or keep a selected set of characters in each string."},
     { "to_file", (PyCFunction)BString_to_file, METH_VARARGS,"Save the BString contents to a file, one string per line."},
     {"from_file", (PyCFunction)BString_from_file, METH_VARARGS | METH_CLASS,"Create a new BString from a line-delimited text file."},
     {"from_csv", (PyCFunction)BString_from_csv, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Create BString rows from a CSV file."},
