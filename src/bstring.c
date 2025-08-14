@@ -1,846 +1,864 @@
-//
-// Created by sinj on 28/06/2025.
-// Implementation of BString class
+/*
+This file is part of BeautifulString python extension library.
+Developed by Juha Sinisalo
+Email: juha.a.sinisalo@gmail.com
+*/
 
 #define PY_SSIZE_T_CLEAN
 #include "bstring.h"
-#include "library.h"
 #include "Python.h"
+#include "library.h"
 
-// Forward declarations of static functions
-static BStringNode* new_BStringNode(PyObject *str_obj);
-static void BString_dealloc(BStringObject *self);
-static PyObject *BString_new(PyTypeObject *type, PyObject *args, PyObject *kwds);
-static int BString_init(BStringObject *self, PyObject *args, PyObject *kwds);
-static PyObject *BString_repr(BStringObject *self);
-static PyObject *BString_call(BStringObject *self, PyObject *args, PyObject *kwds);
-static PyObject *BString_iter(BStringObject *self);
-static PyObject *BString_iternext(BStringObject *self);
-static Py_ssize_t BString_length(BStringObject *self);
-static PyObject *BString_getitem(BStringObject *self, PyObject *key);
-static PyObject *BString_from_node(BStringNode *node);
-static PyObject* BString_extend(BStringObject *self, PyObject *args);
-static PyObject *BString_append(BStringObject *self, PyObject *obj);
-static PyObject *BString_transform_chars(BStringObject *self, PyObject *args, PyObject *kwds);
-static PyObject *BString_repeat(BStringObject *self, Py_ssize_t n);
-static PyObject *BString_filter(BStringObject *self, PyObject *args);
-static PyObject *BString_from_file(PyObject *type, PyObject *args);
-static PyObject *BString_to_file(BStringObject *self, PyObject *args);
-static PyObject *BString_from_csv(PyObject *type, PyObject *args, PyObject *kwds);
-static PyObject *BString_to_csv(PyObject *type, PyObject *args, PyObject *kwds);
-static PyObject *BString_render_as_csv_string(BStringObject *self, const char *delimiter, const char *quotechar, int quoting);
-static PyObject *BString_map(BStringObject *self, PyObject *args);
-static PyObject *BString_get_head(BStringObject *self, void *closure);
-static PyObject *BString_get_tail(BStringObject *self, void *closure);
-static PyObject *BString_get_next(BStringObject *self, void *closure);
-static PyObject *BString_get_prev(BStringObject *self, void *closure);
-static PyObject *BString_move_next(BStringObject *self, PyObject *Py_UNUSED(args));
-static PyObject *BString_move_prev(BStringObject *self, PyObject *Py_UNUSED(args));
-static PyObject *BString_move_to_head(BStringObject *self, PyObject *Py_UNUSED(args));
-static PyObject *BString_move_to_tail(BStringObject *self, PyObject *Py_UNUSED(args));
+static PyObject *BString_unique(BStringObject *self, PyObject *Py_UNUSED(args))
+{
 
+  BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+  if (!result)
+    return NULL;
 
+  PyObject *seen_set = PySet_New(NULL);
+  if (!seen_set)
+  {
+    Py_DECREF(result);
+    return NULL;
+  }
+  BStringNode *current = self->head;
+  while (current)
+  {
 
-// ============================================================================
-// BString .comtains and .unique
-// ============================================================================
+    int contains = PySet_Contains(seen_set, current->str);
+    if (contains < 0)
+    { 
+      Py_DECREF(result);
+      Py_DECREF(seen_set);
+      return NULL;
+    }
 
-// BString .unique method
-static PyObject *BString_unique(BStringObject *self, PyObject *Py_UNUSED(args)) {
-    // Create a new BString for the results
-    BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-    if (!result) return NULL;
+    if (contains == 0)
+    {
 
-    // Use a Python Set to efficiently track seen strings
-    PyObject *seen_set = PySet_New(NULL);
-    if (!seen_set) {
+      if (PySet_Add(seen_set, current->str) != 0)
+      {
         Py_DECREF(result);
+        Py_DECREF(seen_set);
         return NULL;
+      }
+
+      BString_append(result, current->str);
     }
-
-    BStringNode *current = self->head;
-    while (current) {
-        // Check if the string is already in our set of seen strings
-        int contains = PySet_Contains(seen_set, current->str);
-
-        if (contains < 0) { // An error occurred
-            Py_DECREF(result);
-            Py_DECREF(seen_set);
-            return NULL;
-        }
-
-        // If the string has not been seen before...
-        if (contains == 0) {
-            // ...add it to the set...
-            if (PySet_Add(seen_set, current->str) != 0) {
-                Py_DECREF(result);
-                Py_DECREF(seen_set);
-                return NULL;
-            }
-            // ...and append it to our result BString.
-            BString_append(result, current->str);
-        }
-        current = current->next;
-    }
-
-    Py_DECREF(seen_set); // Clean up the set
-    return (PyObject *)result;
+    current = current->next;
+  }
+  Py_DECREF(seen_set); 
+  return (PyObject *)result;
 }
 
-// BString .contains method
-static PyObject *BString_contains(BStringObject *self, PyObject *args, PyObject *kwds) {
-    const char *substring_cstr;
-    int case_sensitive = 1; // Default to True
-    static char *kwlist[] = {"substring", "case_sensitive", NULL};
+static PyObject *BString_contains(BStringObject *self, PyObject *args, PyObject *kwds)
+{
+  const char *substring_cstr;
+  int case_sensitive = 1; 
+  static char *kwlist[] = {"substring", "case_sensitive", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|p", kwlist, &substring_cstr, &case_sensitive))
+  {
+    return NULL;
+  }
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|p", kwlist,
-                                     &substring_cstr, &case_sensitive)) {
-        return NULL;
-                                     }
+  PyObject *substring_obj = PyUnicode_FromString(substring_cstr);
+  if (!substring_obj)
+    return NULL;
 
-    PyObject *substring_obj = PyUnicode_FromString(substring_cstr);
-    if (!substring_obj) return NULL;
+  BStringNode *current = self->head;
+  while (current)
+  {
+    PyObject *target_str = current->str;
+    PyObject *target_substr = substring_obj;
+    int found = 0;
 
-    BStringNode *current = self->head;
-    while (current) {
-        PyObject *target_str = current->str;
-        PyObject *target_substr = substring_obj;
-        int found = 0;
-
-        // For case-insensitive, create temporary lowercase versions
-        if (!case_sensitive) {
-            target_str = PyObject_CallMethod(current->str, "lower", NULL);
-            target_substr = PyObject_CallMethod(substring_obj, "lower", NULL);
-        }
-
-        if (target_str && target_substr) {
-            if (PyUnicode_Find(target_str, target_substr, 0, PyUnicode_GET_LENGTH(target_str), 1) != -1) {
-                found = 1;
-            }
-        }
-
-        // Clean up temporary objects if they were created
-        if (!case_sensitive) {
-            Py_XDECREF(target_str);
-            Py_XDECREF(target_substr);
-        }
-
-        if (found || PyErr_Occurred()) {
-            Py_DECREF(substring_obj);
-            if (PyErr_Occurred()) return NULL;
-            Py_RETURN_TRUE;
-        }
-
-        current = current->next;
+    if (!case_sensitive)
+    {
+      target_str = PyObject_CallMethod(current->str, "lower", NULL);
+      target_substr = PyObject_CallMethod(substring_obj, "lower", NULL);
     }
 
-    Py_DECREF(substring_obj);
-    Py_RETURN_FALSE;
+    if (target_str && target_substr)
+    {
+      if (PyUnicode_Find(target_str, target_substr, 0, PyUnicode_GET_LENGTH(target_str), 1) != -1)
+      {
+        found = 1;
+      }
+    }
+
+    if (!case_sensitive)
+    {
+      Py_XDECREF(target_str);
+      Py_XDECREF(target_substr);
+    }
+
+    if (found || PyErr_Occurred())
+    {
+      Py_DECREF(substring_obj);
+      if (PyErr_Occurred())
+        return NULL;
+      Py_RETURN_TRUE;
+    }
+
+    current = current->next;
+  }
+  Py_DECREF(substring_obj);
+  Py_RETURN_FALSE;
 }
 
-// ============================================================================
-// BString .join and .split
-// ============================================================================
 
+static PyObject *BString_join(BStringObject *self, PyObject *separator)
+{
+  if (!PyUnicode_Check(separator))
+  {
+    PyErr_SetString(PyExc_TypeError, "separator must be a string");
+    return NULL;
+  }
 
-// Add join method
-static PyObject *BString_join(BStringObject *self, PyObject *separator) {
-    if (!PyUnicode_Check(separator)) {
-        PyErr_SetString(PyExc_TypeError, "separator must be a string");
-        return NULL;
-    }
+  PyObject *list = PyList_New(self->size);
+  if (!list)
+    return NULL;
 
-    // First, convert the BString to a standard PyList for safety and compatibility.
-    PyObject *list = PyList_New(self->size);
-    if (!list) return NULL;
+  BStringNode *current = self->head;
+  for (Py_ssize_t i = 0; i < self->size; ++i)
+  {
+    Py_INCREF(current->str);
+    PyList_SET_ITEM(list, i, current->str);
+    current = current->next;
+  }
 
-    BStringNode *current = self->head;
-    for (Py_ssize_t i = 0; i < self->size; ++i) {
-        Py_INCREF(current->str);
-        PyList_SET_ITEM(list, i, current->str);
-        current = current->next;
-    }
-
-    // Now, join the standard list.
-    PyObject *result = PyUnicode_Join(separator, list);
-
-    Py_DECREF(list); // Clean up the temporary list.
-    return result;
+  PyObject *result = PyUnicode_Join(separator, list);
+  Py_DECREF(list); 
+  return result;
 }
 
-// .split - this is class method
-static PyObject *BString_split(PyObject *type, PyObject *args, PyObject *kwds) {
-    PyObject *string_to_split;
-    const char *delimiter = NULL;
-    static char *kwlist[] = {"string", "delimiter", NULL};
+static PyObject *BString_split(PyObject *type, PyObject *args, PyObject *kwds)
+{
+  PyObject *string_to_split;
+  const char *delimiter = NULL;
+  static char *kwlist[] = {"string", "delimiter", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|s", kwlist, &string_to_split, &delimiter))
+  {
+    return NULL;
+  }
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|s", kwlist, &string_to_split, &delimiter)) {
-        return NULL;
-    }
+  PyObject *split_list = PyObject_CallMethod(string_to_split, "split", "z", delimiter);
+  if (!split_list)
+    return NULL;
 
-    // Call the string's own .split() method, which returns a PyList
-    PyObject *split_list = PyObject_CallMethod(string_to_split, "split", "z", delimiter);
-    if (!split_list) return NULL;
+  PyObject *args_tuple = PyList_AsTuple(split_list);
+  Py_DECREF(split_list); 
+  if (!args_tuple)
+  {
+    return NULL; 
+  }
 
-    // Convert the list of strings to a tuple for the BString constructor call
-    PyObject *args_tuple = PyList_AsTuple(split_list);
-    Py_DECREF(split_list); // We are done with the list
-    if (!args_tuple) {
-        return NULL; // Failed to create tuple
-    }
-
-    // Create a new BString from the tuple of arguments
-    PyObject *result_bstring = PyObject_CallObject(type, args_tuple);
-    Py_DECREF(args_tuple); // We are done with the tuple
-
-    return result_bstring;
-}
-// ============================================================================
-// BString CSV FILE I/O
-// ============================================================================
-// INTERNAL HELPER for rendering a BString as a single CSV formatted string.
-// This function contains the core CSV logic and is called by other methods.
-static PyObject *_BString_render_as_csv_string(BStringObject *self, const char *delimiter, const char *quotechar, int quoting) {
-    if (strlen(delimiter) != 1 || strlen(quotechar) != 1) {
-        PyErr_SetString(PyExc_ValueError, "delimiter and quotechar must be single characters");
-        return NULL;
-    }
-
-    PyObject *processed_fields = PyList_New(0);
-    if (!processed_fields) return NULL;
-
-    BStringNode *current = self->head;
-    while (current) {
-        int needs_quoting = 0;
-        PyObject *field = current->str;
-
-        if (quoting == BSTRING_QUOTE_ALL) {
-            needs_quoting = 1;
-        } else if (quoting == BSTRING_QUOTE_MINIMAL) {
-            PyObject *delim_obj = PyUnicode_FromString(delimiter);
-            PyObject *qc_obj = PyUnicode_FromString(quotechar);
-            if (delim_obj && qc_obj &&
-                (PyUnicode_Find(field, delim_obj, 0, PyUnicode_GET_LENGTH(field), 1) != -1 ||
-                 PyUnicode_Find(field, qc_obj, 0, PyUnicode_GET_LENGTH(field), 1) != -1)) {
-                needs_quoting = 1;
-            }
-            Py_XDECREF(delim_obj);
-            Py_XDECREF(qc_obj);
-        }
-
-        PyObject *final_field;
-        if (needs_quoting) {
-            PyObject *qc_obj = PyUnicode_FromString(quotechar);
-            PyObject *doubled_qc_obj = PyUnicode_FromFormat("%s%s", quotechar, quotechar);
-            PyObject *escaped_field = PyUnicode_Replace(field, qc_obj, doubled_qc_obj, -1);
-
-            if (escaped_field) {
-                final_field = PyUnicode_FromFormat("%s%s%s", quotechar, PyUnicode_AsUTF8(escaped_field), quotechar);
-                Py_DECREF(escaped_field);
-            } else {
-                final_field = NULL; // Propagate error
-            }
-
-            Py_DECREF(qc_obj);
-            Py_DECREF(doubled_qc_obj);
-        } else {
-            Py_INCREF(field);
-            final_field = field;
-        }
-
-        if (!final_field || PyList_Append(processed_fields, final_field) != 0) {
-            Py_XDECREF(final_field);
-            Py_DECREF(processed_fields);
-            return NULL;
-        }
-        Py_DECREF(final_field);
-        current = current->next;
-    }
-
-    PyObject *delimiter_obj = PyUnicode_FromString(delimiter);
-    PyObject *csv_string = PyUnicode_Join(delimiter_obj, processed_fields);
-    Py_DECREF(delimiter_obj);
-    Py_DECREF(processed_fields);
-    return csv_string;
+  PyObject *result_bstring = PyObject_CallObject(type, args_tuple);
+  Py_DECREF(args_tuple); 
+  return result_bstring;
 }
 
-// Helper function to write a single BString as a CSV row to a file.
-static int BString_write_csv_row(FILE *file, PyObject *bstring_obj, PyObject *kwds) {
-    // Check if the object is a BString instance
-    if (!PyObject_IsInstance(bstring_obj, (PyObject *)&BStringType)) {
-        PyErr_SetString(PyExc_TypeError, "All items in data list and header must be BString objects.");
-        return -1;
+static PyObject *_BString_render_as_csv_string(BStringObject *self, const char *delimiter, const char *quotechar, int quoting)
+{
+  if (strlen(delimiter) != 1 || strlen(quotechar) != 1)
+  {
+    PyErr_SetString(PyExc_ValueError, "delimiter and quotechar must be single characters");
+    return NULL;
+  }
+  PyObject *processed_fields = PyList_New(0);
+  if (!processed_fields)
+    return NULL;
+
+  BStringNode *current = self->head;
+  while (current)
+  {
+    int needs_quoting = 0;
+    PyObject *field = current->str;
+
+    if (quoting == BSTRING_QUOTE_ALL)
+    {
+      needs_quoting = 1;
+    }
+    else if (quoting == BSTRING_QUOTE_MINIMAL)
+    {
+      PyObject *delim_obj = PyUnicode_FromString(delimiter);
+      PyObject *qc_obj = PyUnicode_FromString(quotechar);
+      if (delim_obj && qc_obj &&
+          (PyUnicode_Find(field, delim_obj, 0, PyUnicode_GET_LENGTH(field), 1) != -1 || PyUnicode_Find(field, qc_obj, 0, PyUnicode_GET_LENGTH(field), 1) != -1))
+      {
+        needs_quoting = 1;
+      }
+      Py_XDECREF(delim_obj);
+      Py_XDECREF(qc_obj);
     }
 
-    // Prepare arguments for the internal __call__ method
-    PyObject *call_args = PyTuple_New(0);
-    // The passed 'kwds' dictionary is already prepared by the caller
-    PyObject *csv_row_str = PyObject_Call(bstring_obj, call_args, kwds);
+    PyObject *final_field;
+    if (needs_quoting)
+    {
+      PyObject *qc_obj = PyUnicode_FromString(quotechar);
+      PyObject *doubled_qc_obj = PyUnicode_FromFormat("%s%s", quotechar, quotechar);
+      PyObject *escaped_field = PyUnicode_Replace(field, qc_obj, doubled_qc_obj, -1);
 
-    Py_DECREF(call_args); // Clean up the empty tuple
-
-    if (!csv_row_str) {
-        return -1; // The __call__ method failed
+      if (escaped_field)
+      {
+        final_field = PyUnicode_FromFormat("%s%s%s", quotechar, PyUnicode_AsUTF8(escaped_field), quotechar);
+        Py_DECREF(escaped_field);
+      }
+      else
+      {
+        final_field = NULL; 
+      }
+      Py_DECREF(qc_obj);
+      Py_DECREF(doubled_qc_obj);
+    }
+    else
+    {
+      Py_INCREF(field);
+      final_field = field;
     }
 
-    // Final check on the result
-    if (!PyUnicode_Check(csv_row_str)) {
-        Py_DECREF(csv_row_str);
-        PyErr_SetString(PyExc_TypeError, "Internal row formatter did not return a string.");
-        return -1;
+    if (!final_field || PyList_Append(processed_fields, final_field) != 0)
+    {
+      Py_XDECREF(final_field);
+      Py_DECREF(processed_fields);
+      return NULL;
     }
+    Py_DECREF(final_field);
+    current = current->next;
+  }
 
-    // Write the formatted string to the file and clean up
-    fprintf(file, "%s\n", PyUnicode_AsUTF8(csv_row_str));
+  PyObject *delimiter_obj = PyUnicode_FromString(delimiter);
+  PyObject *csv_string = PyUnicode_Join(delimiter_obj, processed_fields);
+  Py_DECREF(delimiter_obj);
+  Py_DECREF(processed_fields);
+  return csv_string;
+}
+
+static int BString_write_csv_row(FILE *file, PyObject *bstring_obj, PyObject *kwds)
+{
+  if (!PyObject_IsInstance(bstring_obj, (PyObject *)&BStringType))
+  {
+    PyErr_SetString(PyExc_TypeError, "All items in data list and header must be BString objects.");
+    return -1;
+  }
+
+  PyObject *call_args = PyTuple_New(0);
+  PyObject *csv_row_str = PyObject_Call(bstring_obj, call_args, kwds);
+  Py_DECREF(call_args); 
+  if (!csv_row_str)
+  {
+    return -1; 
+  }
+
+  if (!PyUnicode_Check(csv_row_str))
+  {
     Py_DECREF(csv_row_str);
+    PyErr_SetString(PyExc_TypeError, "Internal row formatter did not return a string.");
+    return -1;
+  }
 
-    return 0; // Success
+  fprintf(file, "%s\n", PyUnicode_AsUTF8(csv_row_str));
+  Py_DECREF(csv_row_str);
+  return 0; 
 }
 
-// Implements the BString.to_csv() class method
-static PyObject *BString_to_csv(PyObject *type, PyObject *args, PyObject *kwds) {
-    const char *filepath;
-    PyObject *data_list = NULL;
-    PyObject *header_obj = NULL;
+static PyObject *BString_to_csv(PyObject *type, PyObject *args, PyObject *kwds)
+{
+  const char *filepath;
+  PyObject *data_list = NULL;
+  PyObject *header_obj = NULL;
 
-    // We manually parse arguments instead of using a single format string for robustness.
-    // 1. Get the required positional filepath.
-    if (!PyArg_ParseTuple(args, "s", &filepath)) {
-        PyErr_SetString(PyExc_TypeError, "to_csv() requires a filepath as the first positional argument.");
-        return NULL;
+  if (!PyArg_ParseTuple(args, "s", &filepath))
+  {
+    PyErr_SetString(PyExc_TypeError, "to_csv() requires a filepath as the first positional argument.");
+    return NULL;
+  }
+
+  if (kwds)
+  {
+    data_list = PyDict_GetItemString(kwds, "data");
+  }
+
+  if (!data_list)
+  {
+    PyErr_SetString(PyExc_TypeError, "to_csv() missing required keyword-only argument: 'data'");
+    return NULL;
+  }
+
+  if (!PyList_Check(data_list))
+  {
+    PyErr_SetString(PyExc_TypeError, "The 'data' argument must be a list of BString objects.");
+    return NULL;
+  }
+
+  if (kwds)
+  {
+    header_obj = PyDict_GetItemString(kwds, "header");
+  }
+
+  PyObject *call_kwargs = PyDict_New();
+  if (!call_kwargs)
+    return NULL;
+
+  if (kwds && PyDict_Check(kwds))
+  {
+    Py_ssize_t pos = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(kwds, &pos, &key, &value))
+    {
+      const char *key_str = PyUnicode_AsUTF8(key);
+      if (strcmp(key_str, "data") != 0 && strcmp(key_str, "header") != 0)
+      {
+        PyDict_SetItem(call_kwargs, key, value);
+      }
     }
+  }
 
-    // 2. Safely get the required 'data' keyword argument.
-    if (kwds) {
-        data_list = PyDict_GetItemString(kwds, "data");
-    }
-    if (!data_list) {
-        PyErr_SetString(PyExc_TypeError, "to_csv() missing required keyword-only argument: 'data'");
-        return NULL;
-    }
-    if (!PyList_Check(data_list)) {
-        PyErr_SetString(PyExc_TypeError, "The 'data' argument must be a list of BString objects.");
-        return NULL;
-    }
-
-    // 3. Safely get the optional 'header' keyword argument.
-    if (kwds) {
-        header_obj = PyDict_GetItemString(kwds, "header");
-    }
-
-    // Prepare keyword arguments for the internal __call__ method
-    PyObject *call_kwargs = PyDict_New();
-    if (!call_kwargs) return NULL;
-
-    // Copy formatting arguments (delimiter, etc.) from the main call to the internal call
-    if (kwds && PyDict_Check(kwds)) {
-        Py_ssize_t pos = 0;
-        PyObject *key, *value;
-        while (PyDict_Next(kwds, &pos, &key, &value)) {
-            const char* key_str = PyUnicode_AsUTF8(key);
-            if (strcmp(key_str, "data") != 0 && strcmp(key_str, "header") != 0) {
-                 PyDict_SetItem(call_kwargs, key, value);
-            }
-        }
-    }
-    // Set the mandatory 'container' argument for the internal call
-    PyDict_SetItemString(call_kwargs, "container", PyUnicode_FromString("csv"));
-
-    FILE *file = fopen(filepath, "wb");
-    if (!file) {
-        PyErr_SetFromErrnoWithFilename(PyExc_IOError, filepath);
-        Py_DECREF(call_kwargs);
-        return NULL;
-    }
-
-    PyObject *empty_tuple = PyTuple_New(0);
-
-    // Write Header
-    if (header_obj && header_obj != Py_None) {
-        PyObject *header_row_str = PyObject_Call(header_obj, empty_tuple, call_kwargs);
-        if (!header_row_str) { fclose(file); Py_DECREF(call_kwargs); Py_DECREF(empty_tuple); return NULL; }
-        fprintf(file, "%s\n", PyUnicode_AsUTF8(header_row_str));
-        Py_DECREF(header_row_str);
-    }
-
-    // Write Data
-    Py_ssize_t num_rows = PyList_Size(data_list);
-    for (Py_ssize_t i = 0; i < num_rows; ++i) {
-        PyObject *row_obj = PyList_GET_ITEM(data_list, i);
-        PyObject *data_row_str = PyObject_Call(row_obj, empty_tuple, call_kwargs);
-        if (!data_row_str) { fclose(file); Py_DECREF(call_kwargs); Py_DECREF(empty_tuple); return NULL; }
-        fprintf(file, "%s\n", PyUnicode_AsUTF8(data_row_str));
-        Py_DECREF(data_row_str);
-    }
-
-    fclose(file);
+  PyDict_SetItemString(call_kwargs, "container", PyUnicode_FromString("csv"));
+  FILE *file = fopen(filepath, "wb");
+  if (!file)
+  {
+    PyErr_SetFromErrnoWithFilename(PyExc_IOError, filepath);
     Py_DECREF(call_kwargs);
-    Py_DECREF(empty_tuple);
-    Py_RETURN_NONE;
+    return NULL;
+  }
+
+  PyObject *empty_tuple = PyTuple_New(0);
+
+  if (header_obj && header_obj != Py_None)
+  {
+    PyObject *header_row_str = PyObject_Call(header_obj, empty_tuple, call_kwargs);
+    if (!header_row_str)
+    {
+      fclose(file);
+      Py_DECREF(call_kwargs);
+      Py_DECREF(empty_tuple);
+      return NULL;
+    }
+
+    fprintf(file, "%s\n", PyUnicode_AsUTF8(header_row_str));
+    Py_DECREF(header_row_str);
+  }
+
+  Py_ssize_t num_rows = PyList_Size(data_list);
+  for (Py_ssize_t i = 0; i < num_rows; ++i)
+  {
+    PyObject *row_obj = PyList_GET_ITEM(data_list, i);
+    PyObject *data_row_str = PyObject_Call(row_obj, empty_tuple, call_kwargs);
+    if (!data_row_str)
+    {
+      fclose(file);
+      Py_DECREF(call_kwargs);
+      Py_DECREF(empty_tuple);
+      return NULL;
+    }
+
+    fprintf(file, "%s\n", PyUnicode_AsUTF8(data_row_str));
+    Py_DECREF(data_row_str);
+  }
+
+  fclose(file);
+  Py_DECREF(call_kwargs);
+  Py_DECREF(empty_tuple);
+  Py_RETURN_NONE;
 }
 
-// Implements the BString.from_csv() class method
-static PyObject *BString_from_csv(PyObject *type, PyObject *args, PyObject *kwds) {
-    const char *filepath;
-    int header = 1;
-    static char *kwlist[] = {"filepath", "header", NULL};
+static PyObject *BString_from_csv(PyObject *type, PyObject *args, PyObject *kwds)
+{
+  const char *filepath;
+  int header = 1;
+  static char *kwlist[] = {"filepath", "header", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|p", kwlist, &filepath, &header))
+  {
+    return NULL;
+  }
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|p", kwlist, &filepath, &header)) {
-        return NULL;
+  PyObject *builtins = NULL, *open_func = NULL, *file_handle = NULL;
+  PyObject *csv_module = NULL, *reader_func = NULL, *reader_obj = NULL, *reader_iter = NULL;
+  PyObject *header_bstring = NULL, *data_rows_list = NULL, *return_value = NULL;
+
+  builtins = PyImport_ImportModule("builtins");
+  if (!builtins)
+    goto cleanup;
+
+  open_func = PyObject_GetAttrString(builtins, "open");
+
+  if (!open_func)
+    goto cleanup;
+
+  PyObject *open_args = Py_BuildValue("(ss)", filepath, "r");
+  PyObject *open_kwargs = Py_BuildValue("{s:s}", "encoding", "utf-8");
+  file_handle = PyObject_Call(open_func, open_args, open_kwargs);
+  Py_DECREF(open_args);
+  Py_DECREF(open_kwargs);
+
+  if (!file_handle)
+    goto cleanup;
+
+  csv_module = PyImport_ImportModule("csv");
+  if (!csv_module)
+    goto cleanup;
+
+  reader_func = PyObject_GetAttrString(csv_module, "reader");
+
+  if (!reader_func)
+    goto cleanup;
+
+  reader_obj = PyObject_CallFunctionObjArgs(reader_func, file_handle, NULL);
+
+  if (!reader_obj)
+    goto cleanup;
+
+  reader_iter = PyObject_GetIter(reader_obj);
+
+  if (!reader_iter)
+    goto cleanup;
+
+  if (header)
+  {
+    PyObject *row_list = PyIter_Next(reader_iter);
+    if (row_list)
+    {
+      PyObject *row_tuple = PyList_AsTuple(row_list);
+      header_bstring = PyObject_CallObject(type, row_tuple);
+      Py_DECREF(row_tuple);
+      Py_DECREF(row_list);
+      if (!header_bstring)
+        goto cleanup;
     }
-
-    // --- Declare all Python objects at the top and initialize to NULL ---
-    PyObject *builtins = NULL, *open_func = NULL, *file_handle = NULL;
-    PyObject *csv_module = NULL, *reader_func = NULL, *reader_obj = NULL, *reader_iter = NULL;
-    PyObject *header_bstring = NULL, *data_rows_list = NULL, *return_value = NULL;
-
-    // --- Step 1: Get 'open' and the file handle ---
-    builtins = PyImport_ImportModule("builtins");
-    if (!builtins) goto cleanup;
-    open_func = PyObject_GetAttrString(builtins, "open");
-    if (!open_func) goto cleanup;
-
-    PyObject *open_args = Py_BuildValue("(ss)", filepath, "r");
-    PyObject *open_kwargs = Py_BuildValue("{s:s}", "encoding", "utf-8");
-    file_handle = PyObject_Call(open_func, open_args, open_kwargs);
-    Py_DECREF(open_args);
-    Py_DECREF(open_kwargs);
-    if (!file_handle) goto cleanup;
-
-    // --- Step 2: Create the CSV Reader and its iterator ---
-    csv_module = PyImport_ImportModule("csv");
-    if (!csv_module) goto cleanup;
-    reader_func = PyObject_GetAttrString(csv_module, "reader");
-    if (!reader_func) goto cleanup;
-    reader_obj = PyObject_CallFunctionObjArgs(reader_func, file_handle, NULL);
-    if (!reader_obj) goto cleanup;
-    reader_iter = PyObject_GetIter(reader_obj);
-    if (!reader_iter) goto cleanup;
-
-    // --- Step 3: Process header and data rows ---
-    if (header) {
-        PyObject *row_list = PyIter_Next(reader_iter);
-        if (row_list) {
-            PyObject *row_tuple = PyList_AsTuple(row_list);
-            header_bstring = PyObject_CallObject(type, row_tuple);
-            Py_DECREF(row_tuple);
-            Py_DECREF(row_list);
-            if (!header_bstring) goto cleanup;
-        } else if (PyErr_Occurred()) {
-            goto cleanup;
-        } else {
-            header_bstring = PyObject_CallObject(type, PyTuple_New(0));
-            if (!header_bstring) goto cleanup;
-        }
+    else if (PyErr_Occurred())
+    {
+      goto cleanup;
     }
-
-    data_rows_list = PyList_New(0);
-    if (!data_rows_list) goto cleanup;
-
-    PyObject *row_list;
-    while ((row_list = PyIter_Next(reader_iter))) {
-        PyObject *row_tuple = PyList_AsTuple(row_list);
-        PyObject *row_bstring = PyObject_CallObject(type, row_tuple);
-        Py_DECREF(row_tuple);
-        Py_DECREF(row_list);
-        if (!row_bstring) goto cleanup;
-        if (PyList_Append(data_rows_list, row_bstring) < 0) {
-            Py_DECREF(row_bstring);
-            goto cleanup;
-        }
-        Py_DECREF(row_bstring);
+    else
+    {
+      header_bstring = PyObject_CallObject(type, PyTuple_New(0));
+      if (!header_bstring)
+        goto cleanup;
     }
+  }
 
-    // --- Step 4: Prepare the final return value ---
-    if (header) {
-        return_value = PyTuple_Pack(2, header_bstring, data_rows_list);
-        header_bstring = NULL; // Tuple now owns reference.
-        data_rows_list = NULL; // Tuple now owns reference.
-    } else {
-        return_value = data_rows_list;
-        data_rows_list = NULL; // Return value now owns reference.
+  data_rows_list = PyList_New(0);
+  if (!data_rows_list)
+    goto cleanup;
+
+  PyObject *row_list;
+  while ((row_list = PyIter_Next(reader_iter)))
+  {
+    PyObject *row_tuple = PyList_AsTuple(row_list);
+    PyObject *row_bstring = PyObject_CallObject(type, row_tuple);
+    Py_DECREF(row_tuple);
+    Py_DECREF(row_list);
+
+    if (!row_bstring)
+      goto cleanup;
+
+    if (PyList_Append(data_rows_list, row_bstring) < 0)
+    {
+      Py_DECREF(row_bstring);
+      goto cleanup;
     }
+    Py_DECREF(row_bstring);
+  }
+
+  if (header)
+  {
+    return_value = PyTuple_Pack(2, header_bstring, data_rows_list);
+    header_bstring = NULL; 
+    data_rows_list = NULL; 
+  }
+  else
+  {
+    return_value = data_rows_list;
+    data_rows_list = NULL; 
+  }
 
 cleanup:
-    // Clean up CSV-related objects first
-    Py_XDECREF(reader_iter);
-    Py_XDECREF(reader_obj);
-    Py_XDECREF(reader_func);
-    Py_XDECREF(csv_module);
 
-    // Explicitly close the file handle if it exists
-    if (file_handle) {
-        PyObject_CallMethod(file_handle, "close", NULL);
-        Py_XDECREF(file_handle);
-    }
-
-    // Clean up remaining objects
-    Py_XDECREF(builtins);
-    Py_XDECREF(open_func);
-    Py_XDECREF(header_bstring);
-    Py_XDECREF(data_rows_list);
-
-    if (PyErr_Occurred()) {
-        Py_XDECREF(return_value);
-        return NULL;
-    }
-
-    return return_value;
-
-    return return_value; // Return the successfully created object.
-}
-
-// Implements the .to_file() instance method
-static PyObject *BString_to_file(BStringObject *self, PyObject *args) {
-    const char *filepath;
-    if (!PyArg_ParseTuple(args, "s", &filepath)) {
-        return NULL;
-    }
-
-    FILE *file = fopen(filepath, "w");
-    if (!file) {
-        PyErr_SetFromErrnoWithFilename(PyExc_IOError, filepath);
-        return NULL;
-    }
-
-    BStringNode *current = self->head;
-    while (current) {
-        fprintf(file, "%s\n", PyUnicode_AsUTF8(current->str));
-        current = current->next;
-    }
-
-    fclose(file);
-    Py_RETURN_NONE;
-}
-
-// Implements the .from_file() class method
-static PyObject *BString_from_file(PyObject *type, PyObject *args) {
-    const char *filepath;
-    if (!PyArg_ParseTuple(args, "s", &filepath)) {
-        return NULL;
-    }
-
-    FILE *file = fopen(filepath, "r");
-    if (!file) {
-        PyErr_SetFromErrnoWithFilename(PyExc_IOError, filepath);
-        return NULL;
-    }
-
-    // Create a new, empty BString instance by calling the type object
-    BStringObject *new_bstring = (BStringObject *)((PyTypeObject*)type)->tp_new((PyTypeObject*)type, NULL, NULL);
-    if (!new_bstring) {
-        fclose(file);
-        return NULL;
-    }
-
-    // Read the file line by line
-    char buffer[4096]; // A reasonably sized buffer for lines
-    while (fgets(buffer, sizeof(buffer), file)) {
-        // Remove trailing newline character(s)
-        buffer[strcspn(buffer, "\r\n")] = 0;
-
-        // Create a Python string from the C buffer
-        PyObject* line_str = PyUnicode_FromString(buffer);
-        if (!line_str) {
-            Py_DECREF(new_bstring);
-            fclose(file);
-            return NULL;
-        }
-
-        // Append the new string to our BString object
-        // (This is the same logic as our BString_append method)
-        BStringNode *new_node = new_BStringNode(line_str);
-        Py_DECREF(line_str); // new_BStringNode now holds the reference
-
-        if (!new_node) {
-            Py_DECREF(new_bstring);
-            fclose(file);
-            return NULL;
-        }
-
-        if (new_bstring->tail == NULL) {
-            new_bstring->head = new_bstring->tail = new_bstring->current = new_node;
-        } else {
-            new_bstring->tail->next = new_node;
-            new_node->prev = new_bstring->tail;
-            new_bstring->tail = new_node;
-        }
-        new_bstring->size++;
-    }
-
-    fclose(file);
-
-    return (PyObject *)new_bstring;
-}
-
-// transform_chars method
-static PyObject *BString_transform_chars(BStringObject *self, PyObject *args, PyObject *kwds) {
-    const char *characters;
-    const char *mode = "remove";
-    int inplace = 0; // Py_False
-    static char *kwlist[] = {"characters", "mode", "inplace", NULL};
-
-    // Use "s|sp" to parse: required string, optional string, optional boolean(predicate)
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|sp", kwlist,
-                                     &characters, &mode, &inplace)) {
-        return NULL;
-    }
-
-    // Validate the 'mode' argument
-    int is_remove_mode = (strcmp(mode, "remove") == 0);
-    if (!is_remove_mode && strcmp(mode, "keep") != 0) {
-        PyErr_SetString(PyExc_ValueError, "mode must be either 'remove' or 'keep'");
-        return NULL;
-    }
-
-    // --- Create a fast lookup set from the input characters ---
-    PyObject *char_set = PySet_New(PyUnicode_FromString(characters));
-    if (!char_set) return NULL;
-
-    BStringObject *target_bstring = self;
-    BStringObject *result_bstring = NULL;
-    BStringNode *target_node = NULL;
-
-    // If not in-place, create a new BString to hold the results
-    if (!inplace) {
-        result_bstring = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-        if (!result_bstring) {
-            Py_DECREF(char_set);
-            return NULL;
-        }
-        target_bstring = result_bstring;
-    }
-
-    // Iterate through the original BString's nodes
-    BStringNode *source_node = self->head;
-    while(source_node) {
-        PyObject *source_str = source_node->str;
-        PyObject *parts_list = PyList_New(0); // To build the new string
-        if (!parts_list) { Py_DECREF(char_set); Py_XDECREF(result_bstring); return NULL; }
-
-        Py_ssize_t len = PyUnicode_GET_LENGTH(source_str);
-        for (Py_ssize_t i = 0; i < len; ++i) {
-            // Create a temporary 1-char string for the set lookup
-            PyObject *single_char = PyUnicode_FromOrdinal(PyUnicode_READ_CHAR(source_str, i));
-            if (!single_char) { /* handle error */ }
-
-            int contains = PySet_Contains(char_set, single_char);
-            int keep_char = (is_remove_mode && !contains) || (!is_remove_mode && contains);
-
-            if (keep_char) {
-                PyList_Append(parts_list, single_char);
-            }
-            Py_DECREF(single_char);
-        }
-
-        PyObject *empty_str = PyUnicode_FromString("");
-        PyObject *transformed_str = PyUnicode_Join(empty_str, parts_list);
-        Py_DECREF(empty_str);
-        Py_DECREF(parts_list);
-
-        if (!transformed_str) { /* handle error */ }
-
-        if (inplace) {
-            Py_DECREF(source_node->str); // DECREF the old string
-            source_node->str = transformed_str; // new_BStringNode will INCREF
-        } else {
-            // Append the new transformed string to the result BString
-            BString_append((BStringObject*)target_bstring, transformed_str);
-            Py_DECREF(transformed_str);
-        }
-
-        source_node = source_node->next;
-    }
-
-    Py_DECREF(char_set);
-
-    if (inplace) {
-        Py_RETURN_NONE;
-    } else {
-        return (PyObject *)result_bstring;
-    }
-}
-
-
-// ============================================================================
-// BString MUTABILITY HELPERS
-// ============================================================================
-
-// Helper to remove a specific node and return its string. The caller is responsible for the reference.
-// This is the core logic for pop() and del.
-static PyObject *BString_remove_node(BStringObject *self, BStringNode *node_to_remove) {
-    if (!node_to_remove) return NULL; // Should not happen if called correctly
-
-    BStringNode *node_before = node_to_remove->prev;
-    BStringNode *node_after = node_to_remove->next;
-
-    // Rewire the list to bypass the node
-    if (node_before) {
-        node_before->next = node_after;
-    } else {
-        // We are removing the head
-        self->head = node_after;
-    }
-
-    if (node_after) {
-        node_after->prev = node_before;
-    } else {
-        // We are removing the tail
-        self->tail = node_before;
-    }
-
-    // If the 'current' pointer was on the removed node, move it to a safe place.
-    if (self->current == node_to_remove) {
-        self->current = self->head;
-    }
-
-    self->size--;
-
-    PyObject* returned_str = node_to_remove->str; // The string to be returned
-    PyMem_Free(node_to_remove); // Free the C struct for the node
-
-    return returned_str; // The caller now owns this reference
-}
-
-// ============================================================================
-// BString MUTABILITY METHODS
-// ============================================================================
-
-static PyObject *BString_append(BStringObject *self, PyObject *obj) {
-    if (!PyUnicode_Check(obj)) {
-        PyErr_SetString(PyExc_TypeError, "can only append a string");
-        return NULL;
-    }
-
-    BStringNode *new_node = new_BStringNode(obj);
-    if (!new_node) return NULL;
-
-    if (self->tail == NULL) { // The list is currently empty
-        self->head = self->tail = self->current = new_node;
-    } else {
-        self->tail->next = new_node;
-        new_node->prev = self->tail;
-        self->tail = new_node;
-    }
-    self->size++;
-    Py_RETURN_NONE;
-}
-
-static PyObject *BString_insert(BStringObject *self, PyObject *args) {
-    Py_ssize_t index;
-    PyObject *obj;
-    if (!PyArg_ParseTuple(args, "nO", &index, &obj)) {
-        return NULL;
-    }
-    if (!PyUnicode_Check(obj)) {
-        PyErr_SetString(PyExc_TypeError, "can only insert a string");
-        return NULL;
-    }
-
-    // Handle edge cases for index, similar to list.insert()
-    if (index >= self->size) {
-        return BString_append(self, obj);
-    }
-    if (index < 0) {
-        index += self->size;
-        if (index < 0) index = 0;
-    }
-
-    // Find the node currently at the target index
-    BStringNode *node_at_index = self->head;
-    for (Py_ssize_t i = 0; i < index; ++i) {
-        node_at_index = node_at_index->next;
-    }
-
-    BStringNode *new_node = new_BStringNode(obj);
-    if (!new_node) return NULL;
-
-    BStringNode *node_before = node_at_index->prev;
-
-    // Rewire pointers
-    new_node->next = node_at_index;
-    new_node->prev = node_before;
-    node_at_index->prev = new_node;
-
-    if (node_before) {
-        node_before->next = new_node;
-    } else {
-        // Inserting at the head
-        self->head = new_node;
-    }
-    self->size++;
-    Py_RETURN_NONE;
-}
-
-static PyObject *BString_pop(BStringObject *self, PyObject *args) {
-    Py_ssize_t index = -1;
-    if (!PyArg_ParseTuple(args, "|n", &index)) {
-        return NULL;
-    }
-    if (self->size == 0) {
-        PyErr_SetString(PyExc_IndexError, "pop from empty BString");
-        return NULL;
-    }
-
-    // Handle negative index
-    if (index < 0) {
-        index += self->size;
-    }
-
-    // Check bounds
-    if (index < 0 || index >= self->size) {
-        PyErr_SetString(PyExc_IndexError, "pop index out of range");
-        return NULL;
-    }
-
-    // Find the node to pop
-    BStringNode *node_to_pop = self->head;
-    for (Py_ssize_t i = 0; i < index; ++i) {
-        node_to_pop = node_to_pop->next;
-    }
-
-    return BString_remove_node(self, node_to_pop);
-}
-
-static PyObject *BString_remove(BStringObject *self, PyObject *value) {
-    if (!PyUnicode_Check(value)) {
-        PyErr_SetString(PyExc_TypeError, "argument must be a string");
-        return NULL;
-    }
-
-    BStringNode *current = self->head;
-    while(current) {
-        int cmp_res = PyObject_RichCompareBool(current->str, value, Py_EQ);
-        if (cmp_res > 0) { // Found the string
-            PyObject *removed_str = BString_remove_node(self, current);
-            Py_DECREF(removed_str); // We don't return it, so we release our reference
-            Py_RETURN_NONE;
-        }
-        if (cmp_res < 0) { // Comparison failed
-            return NULL;
-        }
-        current = current->next;
-    }
-
-    PyErr_SetString(PyExc_ValueError, "BString.remove(x): x not in BString");
+  Py_XDECREF(reader_iter);
+  Py_XDECREF(reader_obj);
+  Py_XDECREF(reader_func);
+  Py_XDECREF(csv_module);
+
+  if (file_handle)
+  {
+    PyObject_CallMethod(file_handle, "close", NULL);
+    Py_XDECREF(file_handle);
+  }
+
+  Py_XDECREF(builtins);
+  Py_XDECREF(open_func);
+  Py_XDECREF(header_bstring);
+  Py_XDECREF(data_rows_list);
+
+  if (PyErr_Occurred())
+  {
+    Py_XDECREF(return_value);
     return NULL;
+  }
+  return return_value;
 }
 
+static PyObject *BString_to_file(BStringObject *self, PyObject *args)
+{
+  const char *filepath;
+  if (!PyArg_ParseTuple(args, "s", &filepath))
+  {
+    return NULL;
+  }
+  FILE *file = fopen(filepath, "w");
+  if (!file)
+  {
+    PyErr_SetFromErrnoWithFilename(PyExc_IOError, filepath);
+    return NULL;
+  }
+  BStringNode *current = self->head;
+  while (current)
+  {
+    fprintf(file, "%s\n", PyUnicode_AsUTF8(current->str));
+    current = current->next;
+  }
+  fclose(file);
+  Py_RETURN_NONE;
+}
 
-// ============================================================================
-// BString METHOD DEFINITIONS
-// ============================================================================
-static PyMethodDef BString_methods[] = {
-    { "map", (PyCFunction)BString_map, METH_VARARGS, "Apply a string method to all elements..." },
-    { "filter", (PyCFunction)BString_filter, METH_VARARGS, "Filter elements using a string method..." },
+static PyObject *BString_from_file(PyObject *type, PyObject *args)
+{
+  const char *filepath;
+  if (!PyArg_ParseTuple(args, "s", &filepath))
+  {
+    return NULL;
+  }
+  FILE *file = fopen(filepath, "r");
+  if (!file)
+  {
+    PyErr_SetFromErrnoWithFilename(PyExc_IOError, filepath);
+    return NULL;
+  }
+
+  BStringObject *new_bstring = (BStringObject *)((PyTypeObject *)type)->tp_new((PyTypeObject *)type, NULL, NULL);
+  if (!new_bstring)
+  {
+    fclose(file);
+    return NULL;
+  }
+
+  char buffer[4096]; 
+  while (fgets(buffer, sizeof(buffer), file))
+  {
+
+    buffer[strcspn(buffer, "\r\n")] = 0;
+
+    PyObject *line_str = PyUnicode_FromString(buffer);
+    if (!line_str)
+    {
+      Py_DECREF(new_bstring);
+      fclose(file);
+      return NULL;
+    }
+
+    BStringNode *new_node = new_BStringNode(line_str);
+    Py_DECREF(line_str); 
+    if (!new_node)
+    {
+      Py_DECREF(new_bstring);
+      fclose(file);
+      return NULL;
+    }
+    if (new_bstring->tail == NULL)
+    {
+      new_bstring->head = new_bstring->tail = new_bstring->current = new_node;
+    }
+    else
+    {
+      new_bstring->tail->next = new_node;
+      new_node->prev = new_bstring->tail;
+      new_bstring->tail = new_node;
+    }
+    new_bstring->size++;
+  }
+  fclose(file);
+  return (PyObject *)new_bstring;
+}
+
+static PyObject *BString_transform_chars(BStringObject *self, PyObject *args, PyObject *kwds)
+{
+  const char *characters;
+  const char *mode = "remove";
+  int inplace = 0; 
+  static char *kwlist[] = {"characters", "mode", "inplace", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|sp", kwlist, &characters, &mode, &inplace))
+  {
+    return NULL;
+  }
+
+  int is_remove_mode = (strcmp(mode, "remove") == 0);
+  if (!is_remove_mode && strcmp(mode, "keep") != 0)
+  {
+    PyErr_SetString(PyExc_ValueError, "mode must be either 'remove' or 'keep'");
+    return NULL;
+  }
+
+  PyObject *char_set = PySet_New(PyUnicode_FromString(characters));
+  if (!char_set)
+    return NULL;
+  BStringObject *target_bstring = self;
+  BStringObject *result_bstring = NULL;
+  BStringNode *target_node = NULL;
+
+  if (!inplace)
+  {
+    result_bstring = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+    if (!result_bstring)
+    {
+      Py_DECREF(char_set);
+      return NULL;
+    }
+    target_bstring = result_bstring;
+  }
+
+  BStringNode *source_node = self->head;
+  while (source_node)
+  {
+    PyObject *source_str = source_node->str;
+    PyObject *parts_list = PyList_New(0); 
+    if (!parts_list)
+    {
+      Py_DECREF(char_set);
+      Py_XDECREF(result_bstring);
+      return NULL;
+    }
+    Py_ssize_t len = PyUnicode_GET_LENGTH(source_str);
+    for (Py_ssize_t i = 0; i < len; ++i)
+    {
+
+      PyObject *single_char = PyUnicode_FromOrdinal(PyUnicode_READ_CHAR(source_str, i));
+      if (!single_char)
+      { /* handle error */
+      }
+      int contains = PySet_Contains(char_set, single_char);
+      int keep_char = (is_remove_mode && !contains) || (!is_remove_mode && contains);
+      if (keep_char)
+      {
+        PyList_Append(parts_list, single_char);
+      }
+      Py_DECREF(single_char);
+    }
+    PyObject *empty_str = PyUnicode_FromString("");
+    PyObject *transformed_str = PyUnicode_Join(empty_str, parts_list);
+    Py_DECREF(empty_str);
+    Py_DECREF(parts_list);
+    if (!transformed_str)
+    { /* handle error */
+    }
+    if (inplace)
+    {
+      Py_DECREF(source_node->str);        
+      source_node->str = transformed_str; 
+    }
+    else
+    {
+
+      BString_append((BStringObject *)target_bstring, transformed_str);
+      Py_DECREF(transformed_str);
+    }
+    source_node = source_node->next;
+  }
+  Py_DECREF(char_set);
+  if (inplace)
+  {
+    Py_RETURN_NONE;
+  }
+  else
+  {
+    return (PyObject *)result_bstring;
+  }
+}
+
+static PyObject *BString_remove_node(BStringObject *self, BStringNode *node_to_remove)
+{
+  if (!node_to_remove)
+    return NULL; 
+  BStringNode *node_before = node_to_remove->prev;
+  BStringNode *node_after = node_to_remove->next;
+
+  if (node_before)
+  {
+    node_before->next = node_after;
+  }
+  else
+  {
+
+    self->head = node_after;
+  }
+  if (node_after)
+  {
+    node_after->prev = node_before;
+  }
+  else
+  {
+
+    self->tail = node_before;
+  }
+
+  if (self->current == node_to_remove)
+  {
+    self->current = self->head;
+  }
+  self->size--;
+  PyObject *returned_str = node_to_remove->str; 
+  PyMem_Free(node_to_remove);                   
+  return returned_str; 
+}
+
+static PyObject *BString_append(BStringObject *self, PyObject *obj)
+{
+  if (!PyUnicode_Check(obj))
+  {
+    PyErr_SetString(PyExc_TypeError, "can only append a string");
+    return NULL;
+  }
+  BStringNode *new_node = new_BStringNode(obj);
+  if (!new_node)
+    return NULL;
+  if (self->tail == NULL)
+  { 
+    self->head = self->tail = self->current = new_node;
+  }
+  else
+  {
+    self->tail->next = new_node;
+    new_node->prev = self->tail;
+    self->tail = new_node;
+  }
+  self->size++;
+  Py_RETURN_NONE;
+}
+
+static PyObject *BString_insert(BStringObject *self, PyObject *args)
+{
+  Py_ssize_t index;
+  PyObject *obj;
+  if (!PyArg_ParseTuple(args, "nO", &index, &obj))
+  {
+    return NULL;
+  }
+  if (!PyUnicode_Check(obj))
+  {
+    PyErr_SetString(PyExc_TypeError, "can only insert a string");
+    return NULL;
+  }
+
+  if (index >= self->size)
+  {
+    return BString_append(self, obj);
+  }
+  if (index < 0)
+  {
+    index += self->size;
+    if (index < 0)
+      index = 0;
+  }
+
+  BStringNode *node_at_index = self->head;
+  for (Py_ssize_t i = 0; i < index; ++i)
+  {
+    node_at_index = node_at_index->next;
+  }
+  BStringNode *new_node = new_BStringNode(obj);
+  if (!new_node)
+    return NULL;
+  BStringNode *node_before = node_at_index->prev;
+
+  new_node->next = node_at_index;
+  new_node->prev = node_before;
+  node_at_index->prev = new_node;
+  if (node_before)
+  {
+    node_before->next = new_node;
+  }
+  else
+  {
+
+    self->head = new_node;
+  }
+  self->size++;
+  Py_RETURN_NONE;
+}
+
+static PyObject *BString_pop(BStringObject *self, PyObject *args)
+{
+  Py_ssize_t index = -1;
+  if (!PyArg_ParseTuple(args, "|n", &index))
+  {
+    return NULL;
+  }
+  if (self->size == 0)
+  {
+    PyErr_SetString(PyExc_IndexError, "pop from empty BString");
+    return NULL;
+  }
+
+  if (index < 0)
+  {
+    index += self->size;
+  }
+
+  if (index < 0 || index >= self->size)
+  {
+    PyErr_SetString(PyExc_IndexError, "pop index out of range");
+    return NULL;
+  }
+
+  BStringNode *node_to_pop = self->head;
+  for (Py_ssize_t i = 0; i < index; ++i)
+  {
+    node_to_pop = node_to_pop->next;
+  }
+  return BString_remove_node(self, node_to_pop);
+}
+
+static PyObject *BString_remove(BStringObject *self, PyObject *value)
+{
+  if (!PyUnicode_Check(value))
+  {
+    PyErr_SetString(PyExc_TypeError, "argument must be a string");
+    return NULL;
+  }
+  BStringNode *current = self->head;
+  while (current)
+  {
+    int cmp_res = PyObject_RichCompareBool(current->str, value, Py_EQ);
+    if (cmp_res > 0)
+    { 
+      PyObject *removed_str = BString_remove_node(self, current);
+      Py_DECREF(removed_str); 
+      Py_RETURN_NONE;
+    }
+    if (cmp_res < 0)
+    { 
+      return NULL;
+    }
+    current = current->next;
+  }
+  PyErr_SetString(PyExc_ValueError, "BString.remove(x): x not in BString");
+  return NULL;
+}
+
+static PyMethodDef BString_methods[] =
+{
+    {"map", (PyCFunction)BString_map, METH_VARARGS, "Apply a string method to all elements..."},
+    {"filter", (PyCFunction)BString_filter, METH_VARARGS, "Filter elements using a string method..."},
     {"extend", (PyCFunction)BString_extend, METH_O, "Extend with items from a sequence."},
-    { "append", (PyCFunction)BString_append, METH_O, "Append string to the end of the BString." },
-    { "insert", (PyCFunction)BString_insert, METH_VARARGS, "Insert string before index." },
-    { "pop", (PyCFunction)BString_pop, METH_VARARGS, "Remove and return string at index (default last)." },
-    { "remove", (PyCFunction)BString_remove, METH_O, "Remove first occurrence of a string." },
+    {"append", (PyCFunction)BString_append, METH_O, "Append string to the end of the BString."},
+    {"insert", (PyCFunction)BString_insert, METH_VARARGS, "Insert string before index."},
+    {"pop", (PyCFunction)BString_pop, METH_VARARGS, "Remove and return string at index (default last)."},
+    {"remove", (PyCFunction)BString_remove, METH_O, "Remove first occurrence of a string."},
     {"transform_chars", (PyCFunction)BString_transform_chars, METH_VARARGS | METH_KEYWORDS, "Remove or keep a selected set of characters in each string."},
-    { "to_file", (PyCFunction)BString_to_file, METH_VARARGS,"Save the BString contents to a file, one string per line."},
-    {"from_file", (PyCFunction)BString_from_file, METH_VARARGS | METH_CLASS,"Create a new BString from a line-delimited text file."},
+    {"to_file", (PyCFunction)BString_to_file, METH_VARARGS, "Save the BString contents to a file, one string per line."},
+    {"from_file", (PyCFunction)BString_from_file, METH_VARARGS | METH_CLASS, "Create a new BString from a line-delimited text file."},
     {"from_csv", (PyCFunction)BString_from_csv, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Create BString rows from a CSV file."},
     {"to_csv", (PyCFunction)BString_to_csv, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Save a list of BString rows to a CSV file."},
     {"move_next", (PyCFunction)BString_move_next, METH_NOARGS, "Move cursor to the next item. Returns False if at the end."},
@@ -851,930 +869,968 @@ static PyMethodDef BString_methods[] = {
     {"split", (PyCFunction)BString_split, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Create a BString by splitting a string."},
     {"contains", (PyCFunction)BString_contains, METH_VARARGS | METH_KEYWORDS, "Check if any string in the BString contains a substring."},
     {"unique", (PyCFunction)BString_unique, METH_NOARGS, "Return a new BString with duplicate strings removed."},
-    {NULL, NULL, 0, NULL}        /* Sentinel */
+    {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
 
-// ============================================================================
-// BString MAP and FILTER Methods
-// ============================================================================
+static PyObject *BString_map(BStringObject *self, PyObject *args)
+{
+  PyObject *method_name_obj;
+  PyObject *method_args_tuple = NULL;
+  Py_ssize_t num_args = PyTuple_Size(args);
+  if (num_args < 1)
+  {
+    PyErr_SetString(PyExc_TypeError, "map() requires at least one argument (the method name)");
+    return NULL;
+  }
 
-// Implements the .map() method - CORRECTED VERSION
-static PyObject *BString_map(BStringObject *self, PyObject *args) {
-    PyObject *method_name_obj;
-    PyObject *method_args_tuple = NULL;
-    Py_ssize_t num_args = PyTuple_Size(args);
+  method_name_obj = PyTuple_GET_ITEM(args, 0);
+  if (!PyUnicode_Check(method_name_obj))
+  {
+    PyErr_SetString(PyExc_TypeError, "first argument to map() must be a string method name");
+    return NULL;
+  }
 
-    if (num_args < 1) {
-        PyErr_SetString(PyExc_TypeError, "map() requires at least one argument (the method name)");
-        return NULL;
-    }
+  method_args_tuple = PyTuple_New(num_args - 1);
+  if (!method_args_tuple)
+  {
+    return NULL; 
+  }
+  for (Py_ssize_t i = 1; i < num_args; ++i)
+  {
+    PyObject *item = PyTuple_GET_ITEM(args, i);
+    Py_INCREF(item); 
+    PyTuple_SET_ITEM(method_args_tuple, i - 1, item);
+  }
 
-    // 1. The first argument is the method name.
-    method_name_obj = PyTuple_GET_ITEM(args, 0);
-    if (!PyUnicode_Check(method_name_obj)) {
-        PyErr_SetString(PyExc_TypeError, "first argument to map() must be a string method name");
-        return NULL;
-    }
-
-    // 2. Pack all subsequent arguments into a new tuple.
-    method_args_tuple = PyTuple_New(num_args - 1);
-    if (!method_args_tuple) {
-        return NULL; // Failed to create tuple
-    }
-    for (Py_ssize_t i = 1; i < num_args; ++i) {
-        PyObject *item = PyTuple_GET_ITEM(args, i);
-        Py_INCREF(item); // PyTuple_SET_ITEM steals a reference
-        PyTuple_SET_ITEM(method_args_tuple, i - 1, item);
-    }
-
-    // Create a new BString for the results
-    BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-    if (!result) {
-        Py_DECREF(method_args_tuple);
-        return NULL;
-    }
-
-    BStringNode *current = self->head;
-    int error_occurred = 0;
-
-    while (current) {
-        // 3. Get the method from the string object (e.g., 'replace')
-        PyObject *method = PyObject_GetAttr(current->str, method_name_obj);
-        if (!method) {
-            error_occurred = 1;
-            break; // Method not found, break the loop
-        }
-
-        // 4. Call the method with the arguments tuple
-        PyObject *call_result = PyObject_CallObject(method, method_args_tuple);
-        Py_DECREF(method); // Clean up the method object
-
-        if (!call_result) {
-            error_occurred = 1;
-            break; // Error during method call, break the loop
-        }
-
-        // Add the new resulting string to our new BString
-        BStringNode *new_node = new_BStringNode(call_result);
-        Py_DECREF(call_result); // new_BStringNode has its own reference
-
-        if (!new_node) {
-            error_occurred = 1;
-            break; // Memory allocation failed
-        }
-
-        if (!result->head) {
-            result->head = result->tail = result->current = new_node;
-        } else {
-            result->tail->next = new_node;
-            new_node->prev = result->tail;
-            result->tail = new_node;
-        }
-        result->size++;
-
-        current = current->next;
-    }
-
+  BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+  if (!result)
+  {
     Py_DECREF(method_args_tuple);
+    return NULL;
+  }
+  BStringNode *current = self->head;
+  int error_occurred = 0;
+  while (current)
+  {
 
-    if (error_occurred) {
-        Py_DECREF(result); // Clean up the result BString on error
-        return NULL;
+    PyObject *method = PyObject_GetAttr(current->str, method_name_obj);
+    if (!method)
+    {
+      error_occurred = 1;
+      break; 
     }
 
-    return (PyObject *)result;
+    PyObject *call_result = PyObject_CallObject(method, method_args_tuple);
+    Py_DECREF(method); 
+    if (!call_result)
+    {
+      error_occurred = 1;
+      break; 
+    }
+
+    BStringNode *new_node = new_BStringNode(call_result);
+    Py_DECREF(call_result); 
+    if (!new_node)
+    {
+      error_occurred = 1;
+      break; 
+    }
+    if (!result->head)
+    {
+      result->head = result->tail = result->current = new_node;
+    }
+    else
+    {
+      result->tail->next = new_node;
+      new_node->prev = result->tail;
+      result->tail = new_node;
+    }
+    result->size++;
+    current = current->next;
+  }
+  Py_DECREF(method_args_tuple);
+  if (error_occurred)
+  {
+    Py_DECREF(result); 
+    return NULL;
+  }
+  return (PyObject *)result;
 }
 
-// Implements the .filter() method with support for callables
-static PyObject *BString_filter(BStringObject *self, PyObject *args) {
-    PyObject *filter_condition;
-    Py_ssize_t num_args = PyTuple_Size(args);
+static PyObject *BString_filter(BStringObject *self, PyObject *args)
+{
+  PyObject *filter_condition;
+  Py_ssize_t num_args = PyTuple_Size(args);
+  if (num_args < 1)
+  {
+    PyErr_SetString(PyExc_TypeError, "filter() requires at least one argument (a method name or a callable)");
+    return NULL;
+  }
 
-    if (num_args < 1) {
-        PyErr_SetString(PyExc_TypeError, "filter() requires at least one argument (a method name or a callable)");
-        return NULL;
+  filter_condition = PyTuple_GET_ITEM(args, 0);
+
+  BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+  if (!result)
+    return NULL;
+  BStringNode *current = self->head;
+  int error_occurred = 0;
+
+  if (PyCallable_Check(filter_condition))
+  {
+    if (num_args > 1)
+    {
+      PyErr_SetString(PyExc_TypeError, "when using a callable, filter() takes exactly 1 argument");
+      Py_DECREF(result);
+      return NULL;
     }
+    while (current)
+    {
 
-    // The first argument is either the method name or the callable
-    filter_condition = PyTuple_GET_ITEM(args, 0);
+      PyObject *call_result = PyObject_CallFunctionObjArgs(filter_condition, current->str, NULL);
+      if (!call_result)
+      {
+        error_occurred = 1;
+        break;
+      }
+      int is_true = PyObject_IsTrue(call_result);
+      Py_DECREF(call_result);
+      if (is_true < 0)
+      { 
+        error_occurred = 1;
+        break;
+      }
+      if (is_true)
+      {
 
-    // Create a new BString for the results
-    BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-    if (!result) return NULL;
-
-    BStringNode *current = self->head;
-    int error_occurred = 0;
-
-    // --- BRANCH 1: Filter condition is a CALLABLE (e.g., a function or lambda) ---
-    if (PyCallable_Check(filter_condition)) {
-        if (num_args > 1) {
-            PyErr_SetString(PyExc_TypeError, "when using a callable, filter() takes exactly 1 argument");
-            Py_DECREF(result);
-            return NULL;
-        }
-
-        while(current) {
-            // Call the callable, passing the current string as the argument
-            PyObject *call_result = PyObject_CallFunctionObjArgs(filter_condition, current->str, NULL);
-            if (!call_result) {
-                error_occurred = 1;
-                break;
-            }
-
-            int is_true = PyObject_IsTrue(call_result);
-            Py_DECREF(call_result);
-
-            if (is_true < 0) { // Error during truthiness check
-                error_occurred = 1;
-                break;
-            }
-            if (is_true) {
-                // If true, add the ORIGINAL string to the result list
-                BStringNode *new_node = new_BStringNode(current->str);
-                if (!new_node) { error_occurred = 1; break; }
-
-                if (!result->head) {
-                    result->head = result->tail = result->current = new_node;
-                } else {
-                    result->tail->next = new_node;
-                    new_node->prev = result->tail;
-                    result->tail = new_node;
-                }
-                result->size++;
-            }
-            current = current->next;
-        }
-    }
-    // --- BRANCH 2: Filter condition is a STRING (a method name) ---
-    else if (PyUnicode_Check(filter_condition)) {
-        // Pack all subsequent arguments into a tuple for the method call
-        PyObject *method_args_tuple = PyTuple_New(num_args - 1);
-        if (!method_args_tuple) { Py_DECREF(result); return NULL; }
-        for (Py_ssize_t i = 1; i < num_args; ++i) {
-            PyObject *item = PyTuple_GET_ITEM(args, i);
-            Py_INCREF(item);
-            PyTuple_SET_ITEM(method_args_tuple, i - 1, item);
-        }
-
-        while(current) {
-            const char* method_name = PyUnicode_AsUTF8(filter_condition);
-            // Call the method on the string object
-            PyObject *call_result = PyObject_CallMethod(current->str, method_name, "O", method_args_tuple);
-            if (!call_result) {
-                error_occurred = 1;
-                break;
-            }
-
-            int is_true = PyObject_IsTrue(call_result);
-            Py_DECREF(call_result);
-
-            if (is_true < 0) { error_occurred = 1; break; }
-            if (is_true) {
-                 // If true, add the ORIGINAL string to the result list
-                BStringNode *new_node = new_BStringNode(current->str);
-                if (!new_node) { error_occurred = 1; break; }
-
-                if (!result->head) {
-                    result->head = result->tail = result->current = new_node;
-                } else {
-                    result->tail->next = new_node;
-                    new_node->prev = result->tail;
-                    result->tail = new_node;
-                }
-                result->size++;
-            }
-            current = current->next;
-        }
-        Py_DECREF(method_args_tuple);
-    }
-    // --- BRANCH 3: Invalid argument type ---
-    else {
-        PyErr_SetString(PyExc_TypeError, "first argument to filter() must be a string or a callable");
-        Py_DECREF(result);
-        return NULL;
-    }
-
-    if (error_occurred) {
-        Py_DECREF(result);
-        return NULL;
-    }
-
-    return (PyObject *)result;
-}
-
-// Implements the '*' operator for BString
-static PyObject *BString_repeat(BStringObject *self, Py_ssize_t n) {
-    // Create a new empty BString for the result
-    BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-    if (!result) {
-        return NULL;
-    }
-
-    // If n is 0 or less, return an empty BString
-    if (n <= 0) {
-        return (PyObject *)result;
-    }
-
-    // Repeat n times
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        BStringNode *current = self->head;
-        while (current) {
-            BStringNode *new_node = new_BStringNode(current->str);
-            if (!new_node) {
-                return NULL; // Handle memory allocation failure
-            }
-            if (!result->head) {
-                result->head = result->tail = result->current = new_node;
-            } else {
-                result->tail->next = new_node;
-                new_node->prev = result->tail;
-                result->tail = new_node;
-            }
-            result->size++;
-            current = current->next;
-        }
-    }
-
-    return (PyObject *)result;
-}
-
-// Helper function for BString_concat on MSVC
-static int BString_append_nodes_from_source(BStringObject *result, BStringObject* source) {
-    BStringNode *current = source->head;
-    while (current) {
         BStringNode *new_node = new_BStringNode(current->str);
-        if (!new_node) return -1; // Error
-
-        if (!result->head) {
-            result->head = result->tail = result->current = new_node;
-        } else {
-            result->tail->next = new_node;
-            new_node->prev = result->tail;
-            result->tail = new_node;
+        if (!new_node)
+        {
+          error_occurred = 1;
+          break;
+        }
+        if (!result->head)
+        {
+          result->head = result->tail = result->current = new_node;
+        }
+        else
+        {
+          result->tail->next = new_node;
+          new_node->prev = result->tail;
+          result->tail = new_node;
         }
         result->size++;
-        current = current->next;
+      }
+      current = current->next;
     }
-    return 0; // Success
+  }
+
+  else if (PyUnicode_Check(filter_condition))
+  {
+
+    PyObject *method_args_tuple = PyTuple_New(num_args - 1);
+    if (!method_args_tuple)
+    {
+      Py_DECREF(result);
+      return NULL;
+    }
+    for (Py_ssize_t i = 1; i < num_args; ++i)
+    {
+      PyObject *item = PyTuple_GET_ITEM(args, i);
+      Py_INCREF(item);
+      PyTuple_SET_ITEM(method_args_tuple, i - 1, item);
+    }
+    while (current)
+    {
+      const char *method_name = PyUnicode_AsUTF8(filter_condition);
+
+      PyObject *call_result = PyObject_CallMethod(current->str, method_name, "O", method_args_tuple);
+      if (!call_result)
+      {
+        error_occurred = 1;
+        break;
+      }
+      int is_true = PyObject_IsTrue(call_result);
+      Py_DECREF(call_result);
+      if (is_true < 0)
+      {
+        error_occurred = 1;
+        break;
+      }
+      if (is_true)
+      {
+
+        BStringNode *new_node = new_BStringNode(current->str);
+        if (!new_node)
+        {
+          error_occurred = 1;
+          break;
+        }
+        if (!result->head)
+        {
+          result->head = result->tail = result->current = new_node;
+        }
+        else
+        {
+          result->tail->next = new_node;
+          new_node->prev = result->tail;
+          result->tail = new_node;
+        }
+        result->size++;
+      }
+      current = current->next;
+    }
+    Py_DECREF(method_args_tuple);
+  }
+
+  else
+  {
+    PyErr_SetString(PyExc_TypeError, "first argument to filter() must be a string or a callable");
+    Py_DECREF(result);
+    return NULL;
+  }
+  if (error_occurred)
+  {
+    Py_DECREF(result);
+    return NULL;
+  }
+  return (PyObject *)result;
 }
 
-static PyObject *BString_concat(BStringObject *self, PyObject *other) {
-    if (!PyObject_IsInstance((PyObject *)other, (PyObject *)&BStringType)) {
-        PyErr_SetString(PyExc_TypeError, "can only concatenate BString to BString");
-        return NULL;
-    }
+static PyObject *BString_repeat(BStringObject *self, Py_ssize_t n)
+{
 
-    BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-    if (!result) return NULL;
+  BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+  if (!result)
+  {
+    return NULL;
+  }
 
-    if (BString_append_nodes_from_source(result, self) != 0) {
-        Py_DECREF(result);
-        return NULL;
-    }
-    if (BString_append_nodes_from_source(result, (BStringObject *)other) != 0) {
-        Py_DECREF(result);
-        return NULL;
-    }
-
+  if (n <= 0)
+  {
     return (PyObject *)result;
-}
+  }
 
-
-// Helper function to create a new BString object from a single
-
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-// Creates a new BStringNode
-static BStringNode* new_BStringNode(PyObject *str_obj) {
-    BStringNode *node = PyMem_Malloc(sizeof(BStringNode));
-    if (!node) {
-        PyErr_NoMemory();
-        return NULL;
+  for (Py_ssize_t i = 0; i < n; ++i)
+  {
+    BStringNode *current = self->head;
+    while (current)
+    {
+      BStringNode *new_node = new_BStringNode(current->str);
+      if (!new_node)
+      {
+        return NULL; 
+      }
+      if (!result->head)
+      {
+        result->head = result->tail = result->current = new_node;
+      }
+      else
+      {
+        result->tail->next = new_node;
+        new_node->prev = result->tail;
+        result->tail = new_node;
+      }
+      result->size++;
+      current = current->next;
     }
-    Py_INCREF(str_obj);
-    node->str = str_obj;
-    node->next = NULL;
-    node->prev = NULL;
-    return node;
+  }
+  return (PyObject *)result;
 }
 
-
-// ============================================================================
-// ITERATOR PROTOCOL IMPLEMENTATION
-// This section is moved up to resolve the compilation error.
-// ============================================================================
-
-// Iterator's deallocation function
-static void BStringIter_dealloc(BStringIterObject *iter) {
-    // No need to DECREF current_node, it's a borrowed reference
-    PyObject_Del(iter);
-}
-
-// Iterator's __next__ method
-static PyObject *BStringIter_iternext(BStringIterObject *iter) {
-    if (iter->current_node) {
-        PyObject *str_obj = iter->current_node->str;
-        Py_INCREF(str_obj); // Return a new reference
-        iter->current_node = iter->current_node->next;
-        return str_obj;
-    } else {
-        // No more items, signal the end of iteration
-        PyErr_SetNone(PyExc_StopIteration);
-        return NULL;
+static int BString_append_nodes_from_source(BStringObject *result, BStringObject *source)
+{
+  BStringNode *current = source->head;
+  while (current)
+  {
+    BStringNode *new_node = new_BStringNode(current->str);
+    if (!new_node)
+      return -1; 
+    if (!result->head)
+    {
+      result->head = result->tail = result->current = new_node;
     }
+    else
+    {
+      result->tail->next = new_node;
+      new_node->prev = result->tail;
+      result->tail = new_node;
+    }
+    result->size++;
+    current = current->next;
+  }
+  return 0; 
 }
 
-// The Iterator Type Definition
-// Now defined before it is used.
-PyTypeObject BStringIter_Type = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "BStringIter",
+static PyObject *BString_concat(BStringObject *self, PyObject *other)
+{
+  if (!PyObject_IsInstance((PyObject *)other, (PyObject *)&BStringType))
+  {
+    PyErr_SetString(PyExc_TypeError, "can only concatenate BString to BString");
+    return NULL;
+  }
+  BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+  if (!result)
+    return NULL;
+  if (BString_append_nodes_from_source(result, self) != 0)
+  {
+    Py_DECREF(result);
+    return NULL;
+  }
+  if (BString_append_nodes_from_source(result, (BStringObject *)other) != 0)
+  {
+    Py_DECREF(result);
+    return NULL;
+  }
+  return (PyObject *)result;
+}
+
+static BStringNode *new_BStringNode(PyObject *str_obj)
+{
+  BStringNode *node = PyMem_Malloc(sizeof(BStringNode));
+  if (!node)
+  {
+    PyErr_NoMemory();
+    return NULL;
+  }
+  Py_INCREF(str_obj);
+  node->str = str_obj;
+  node->next = NULL;
+  node->prev = NULL;
+  return node;
+}
+
+static void BStringIter_dealloc(BStringIterObject *iter)
+{
+
+  PyObject_Del(iter);
+}
+
+static PyObject *BStringIter_iternext(BStringIterObject *iter)
+{
+  if (iter->current_node)
+  {
+    PyObject *str_obj = iter->current_node->str;
+    Py_INCREF(str_obj); 
+    iter->current_node = iter->current_node->next;
+    return str_obj;
+  }
+  else
+  {
+
+    PyErr_SetNone(PyExc_StopIteration);
+    return NULL;
+  }
+}
+
+PyTypeObject BStringIter_Type =
+{
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name = "BStringIter",
     .tp_basicsize = sizeof(BStringIterObject),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_dealloc = (destructor)BStringIter_dealloc,
-    .tp_iter = PyObject_SelfIter, // The iterator is its own iterator
+    .tp_iter = PyObject_SelfIter, 
     .tp_iternext = (iternextfunc)BStringIter_iternext,
 };
 
-
-// ============================================================================
-// BString MAIN TYPE METHODS
-// ============================================================================
-
-// __new__
-static PyObject *BString_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
-    BStringObject *self;
-    self = (BStringObject *)type->tp_alloc(type, 0);
-    if (self != NULL) {
-        self->head = NULL;
-        self->tail = NULL;
-        self->current = NULL;
-        self->size = 0;
-        self->weakreflist = NULL;
-    }
-    return (PyObject *)self;
+static PyObject *BString_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+  BStringObject *self;
+  self = (BStringObject *)type->tp_alloc(type, 0);
+  if (self != NULL)
+  {
+    self->head = NULL;
+    self->tail = NULL;
+    self->current = NULL;
+    self->size = 0;
+    self->weakreflist = NULL;
+  }
+  return (PyObject *)self;
 }
 
-// __init__
-static int BString_init(BStringObject *self, PyObject *args, PyObject *kwds) {
-    for (int i = 0; i < PyTuple_GET_SIZE(args); ++i) {
-        PyObject *item = PyTuple_GET_ITEM(args, i);
-        if (!PyUnicode_Check(item)) {
-            PyErr_SetString(PyExc_TypeError, "All arguments must be strings.");
-            return -1;
-        }
-
-        BStringNode *node = new_BStringNode(item);
-        if (!node) return -1;
-
-        if (!self->head) { // First item
-            self->head = self->tail = self->current = node;
-        } else {
-            self->tail->next = node;
-            node->prev = self->tail;
-            self->tail = node;
-        }
-        self->size++;
+static int BString_init(BStringObject *self, PyObject *args, PyObject *kwds)
+{
+  for (int i = 0; i < PyTuple_GET_SIZE(args); ++i)
+  {
+    PyObject *item = PyTuple_GET_ITEM(args, i);
+    if (!PyUnicode_Check(item))
+    {
+      PyErr_SetString(PyExc_TypeError, "All arguments must be strings.");
+      return -1;
     }
-    return 0;
+    BStringNode *node = new_BStringNode(item);
+    if (!node)
+      return -1;
+    if (!self->head)
+    { 
+      self->head = self->tail = self->current = node;
+    }
+    else
+    {
+      self->tail->next = node;
+      node->prev = self->tail;
+      self->tail = node;
+    }
+    self->size++;
+  }
+  return 0;
 }
 
-// __dealloc__
-static void BString_dealloc(BStringObject *self) {
-    if (self->weakreflist != NULL) {
-        PyObject_ClearWeakRefs((PyObject *) self);
-    }
-
-    BStringNode *current = self->head;
-    while (current) {
-        BStringNode *next = current->next;
-        Py_DECREF(current->str); // Decrement ref count for the Python string
-        PyMem_Free(current);     // Free the node itself
-        current = next;
-    }
-    Py_TYPE(self)->tp_free((PyObject *)self);
+static void BString_dealloc(BStringObject *self)
+{
+  if (self->weakreflist != NULL)
+  {
+    PyObject_ClearWeakRefs((PyObject *)self);
+  }
+  BStringNode *current = self->head;
+  while (current)
+  {
+    BStringNode *next = current->next;
+    Py_DECREF(current->str); 
+    PyMem_Free(current);     
+    current = next;
+  }
+  Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-// __repr__ or print()
-static PyObject *BString_repr(BStringObject *self) {
-    PyObject *list = PyList_New(0);
-    if (!list) return NULL;
-
-    BStringNode *current = self->head;
-    while (current) {
-        if (PyList_Append(list, current->str) != 0) {
-            Py_DECREF(list);
-            return NULL;
-        }
-        current = current->next;
-    }
-
-    PyObject *repr = PyObject_Repr(list);
-    Py_DECREF(list);
-    return repr;
-}
-
-// BString_call function
-static PyObject *BString_call(BStringObject *self, PyObject *args, PyObject *kwds) {
-    // Default values for parameters
-    char *container = "list";
-    PyObject *keys = NULL;
-    char *delimiter = ",";
-    char *quotechar = "\"";
-    int quoting = BSTRING_QUOTE_MINIMAL;
-
-    static char *kwlist[] = {"container", "keys", "delimiter", "quotechar", "quoting", NULL};
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|sOssi", kwlist,
-                                     &container, &keys, &delimiter, &quotechar, &quoting)) {
-        return NULL;
-    }
-
-    // --- Handle 'list' container ---
-    if (strcmp(container, "list") == 0) {
-        PyObject *list = PyList_New(self->size);
-        if (!list) return NULL;
-        BStringNode *current = self->head;
-        for (Py_ssize_t i = 0; i < self->size; ++i) {
-            Py_INCREF(current->str);
-            PyList_SET_ITEM(list, i, current->str);
-            current = current->next;
-        }
-        return list;
-    }
-
-    // --- Handle 'tuple' container ---
-    if (strcmp(container, "tuple") == 0) {
-        PyObject *tuple = PyTuple_New(self->size);
-        if (!tuple) return NULL;
-        BStringNode *current = self->head;
-        for (Py_ssize_t i = 0; i < self->size; ++i) {
-            Py_INCREF(current->str);
-            PyTuple_SET_ITEM(tuple, i, current->str);
-            current = current->next;
-        }
-        return tuple;
-    }
-
-    // --- Handle 'dict' container ---
-    if (strcmp(container, "dict") == 0) {
-        if (!keys || !PyList_Check(keys) || PyList_Size(keys) != self->size) {
-            PyErr_SetString(PyExc_ValueError, "'keys' must be a list of the same length as the BString.");
-            return NULL;
-        }
-        PyObject *dict = PyDict_New();
-        if (!dict) return NULL;
-        BStringNode *current = self->head;
-        for (Py_ssize_t i = 0; i < self->size; ++i) {
-            if (PyDict_SetItem(dict, PyList_GET_ITEM(keys, i), current->str) != 0) {
-                Py_DECREF(dict);
-                return NULL;
-            }
-            current = current->next;
-        }
-        return dict;
-    }
-
-    // --- Handle 'csv' container ---
-    if (strcmp(container, "csv") == 0) {
-        return _BString_render_as_csv_string(self, delimiter, quotechar, quoting);
-    }
-
-    // --- Handle 'json' container ---
-    if (strcmp(container, "json") == 0) {
-        PyObject *data_to_dump = NULL;
-
-        if (keys == NULL) { // No keys provided, create a list
-            data_to_dump = BString_call(self, PyTuple_New(0), NULL); // Reuse list creation
-        } else { // Keys provided, create a dict
-            PyObject* kwargs = PyDict_New();
-            PyDict_SetItemString(kwargs, "keys", keys);
-            data_to_dump = BString_call(self, PyTuple_New(0), kwargs); // Reuse dict creation
-            Py_DECREF(kwargs);
-        }
-        if (!data_to_dump) return NULL;
-
-        // Use Python's json module to dump the object
-        PyObject *json_module = PyImport_ImportModule("json");
-        if (!json_module) { Py_DECREF(data_to_dump); return NULL; }
-
-        PyObject *dumps_func = PyObject_GetAttrString(json_module, "dumps");
-        PyObject *json_string = PyObject_CallFunctionObjArgs(dumps_func, data_to_dump, NULL);
-
-        Py_DECREF(dumps_func);
-        Py_DECREF(json_module);
-        Py_DECREF(data_to_dump);
-
-        return json_string;
-    }
-
-    // Fallback for invalid container name
-    PyErr_SetString(PyExc_ValueError, "Invalid container type specified. Choose from 'list', 'tuple', 'dict', 'csv', 'json'.");
+static PyObject *BString_repr(BStringObject *self)
+{
+  PyObject *list = PyList_New(0);
+  if (!list)
     return NULL;
+  BStringNode *current = self->head;
+  while (current)
+  {
+    if (PyList_Append(list, current->str) != 0)
+    {
+      Py_DECREF(list);
+      return NULL;
+    }
+    current = current->next;
+  }
+  PyObject *repr = PyObject_Repr(list);
+  Py_DECREF(list);
+  return repr;
 }
 
-// Implements the .extend() method
-static PyObject *BString_extend(BStringObject *self, PyObject *iterable) {
-    // Get an iterator from the input object
-    PyObject *iterator = PyObject_GetIter(iterable);
-    if (!iterator) {
-        PyErr_SetString(PyExc_TypeError, "extend() argument must be an iterable");
-        return NULL;
-    }
+static PyObject *BString_call(BStringObject *self, PyObject *args, PyObject *kwds)
+{
 
-    PyObject *item;
-    // Loop through the iterator
-    while ((item = PyIter_Next(iterator))) {
-        // Check if the item is a string
-        if (!PyUnicode_Check(item)) {
-            PyErr_SetString(PyExc_TypeError, "BString can only extend with an iterable of strings");
-            Py_DECREF(item);
-            Py_DECREF(iterator);
-            return NULL;
-        }
+  char *container = "list";
+  PyObject *keys = NULL;
+  char *delimiter = ",";
+  char *quotechar = "\"";
+  int quoting = BSTRING_QUOTE_MINIMAL;
+  static char *kwlist[] = {"container", "keys", "delimiter", "quotechar", "quoting", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|sOssi", kwlist, &container, &keys, &delimiter, &quotechar, &quoting))
+  {
+    return NULL;
+  }
 
-        // Create a new node and append it
-        BStringNode *new_node = new_BStringNode(item);
-        if (!new_node) {
-            Py_DECREF(item);
-            Py_DECREF(iterator);
-            return NULL;
-        }
-
-        if (self->tail == NULL) { // The BString is currently empty
-            self->head = self->tail = self->current = new_node;
-        } else {
-            self->tail->next = new_node;
-            new_node->prev = self->tail;
-            self->tail = new_node;
-        }
-        self->size++;
-
-        // We are done with the item from the iterator
-        Py_DECREF(item);
-    }
-
-    // Clean up the iterator
-    Py_DECREF(iterator);
-
-    // Check if an error occurred during iteration
-    if (PyErr_Occurred()) {
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
-}
-
-
-// BString's __iter__ method
-static PyObject *BString_iter(BStringObject *self) {
-    // Reset the main object's current pointer to the head,
-    // useful for consistent behavior of .next/.prev after iteration.
-    self->current = self->head;
-
-    // Create a new, dedicated iterator object
-    BStringIterObject *iter = PyObject_New(BStringIterObject, &BStringIter_Type);
-    if (!iter) {
-        return NULL;
-    }
-
-    // The new iterator starts at the head of the BString's list
-    iter->current_node = self->head;
-
-    return (PyObject *)iter;
-}
-
-
-// ============================================================================
-// BString PROTOCOL DEFINITIONS
-// ============================================================================
-
-// Sequence Protocol
-static Py_ssize_t BString_length(BStringObject *self) {
-    return self->size;
-}
-
-// ============================================================================
-// BString SEQUENCE METHODS (MODIFIED)
-// ============================================================================
-
-// --- This function replaces the old BString_getitem ---
-static PyObject *BString_getitem(BStringObject *self, PyObject *key) {
-    // Check if the key is a slice object
-    if (PySlice_Check(key)) {
-        Py_ssize_t start, stop, step, slicelength;
-
-        // PySlice_GetIndicesEx is the modern, safe way to get slice indices.
-        // It correctly handles negative indices and out-of-bounds values.
-        if (PySlice_GetIndicesEx(key, self->size, &start, &stop, &step, &slicelength) < 0) {
-            return NULL; // Error occurred
-        }
-
-        // Create a new BString object to hold the slice result
-        BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
-        if (!result) return NULL;
-
-        if (slicelength <= 0) {
-            return (PyObject *)result; // Return empty BString
-        }
-
-        // Find the starting node
-        BStringNode *current = self->head;
-        for (Py_ssize_t i = 0; i < start; ++i) {
-            current = current->next;
-        }
-
-        // Populate the new BString with the sliced nodes
-        for (Py_ssize_t i = 0; i < slicelength; ++i) {
-            BStringNode *new_node = new_BStringNode(current->str);
-            if (!new_node) {
-                BString_dealloc(result);
-                return NULL;
-            }
-            if (!result->head) {
-                result->head = result->tail = result->current = new_node;
-            } else {
-                result->tail->next = new_node;
-                new_node->prev = result->tail;
-                result->tail = new_node;
-            }
-            result->size++;
-
-            // Move to the next node according to the step
-            for(Py_ssize_t j = 0; j < step && current; ++j) {
-                current = current->next;
-            }
-        }
-
-        return (PyObject *)result;
-    }
-    // --- Fallback to integer indexing if not a slice ---
-    else if (PyLong_Check(key)) {
-        Py_ssize_t i = PyLong_AsSsize_t(key);
-        if (i < 0) {
-            i += self->size;
-        }
-        if (i < 0 || i >= self->size) {
-            PyErr_SetString(PyExc_IndexError, "BString index out of range");
-            return NULL;
-        }
-        BStringNode *current = self->head;
-        for (Py_ssize_t j = 0; j < i; ++j) {
-            current = current->next;
-        }
-        Py_INCREF(current->str);
-        return current->str;
-    }
-    else {
-        PyErr_SetString(PyExc_TypeError, "BString indices must be integers or slices");
-        return NULL;
-    }
-}
-
-// Helper to remove a range of nodes for slice deletion.
-// Returns 0 on success, -1 on failure.
-static int BString_delete_slice_nodes(BStringObject *self, Py_ssize_t start, Py_ssize_t stop) {
-    if (start >= stop) {
-        return 0; // Nothing to delete.
-    }
-
-    // Find the node at the start of the slice.
+  if (strcmp(container, "list") == 0)
+  {
+    PyObject *list = PyList_New(self->size);
+    if (!list)
+      return NULL;
     BStringNode *current = self->head;
-    for (Py_ssize_t i = 0; i < start && current; ++i) {
+    for (Py_ssize_t i = 0; i < self->size; ++i)
+    {
+      Py_INCREF(current->str);
+      PyList_SET_ITEM(list, i, current->str);
+      current = current->next;
+    }
+    return list;
+  }
+
+  if (strcmp(container, "tuple") == 0)
+  {
+    PyObject *tuple = PyTuple_New(self->size);
+    if (!tuple)
+      return NULL;
+    BStringNode *current = self->head;
+    for (Py_ssize_t i = 0; i < self->size; ++i)
+    {
+      Py_INCREF(current->str);
+      PyTuple_SET_ITEM(tuple, i, current->str);
+      current = current->next;
+    }
+    return tuple;
+  }
+
+  if (strcmp(container, "dict") == 0)
+  {
+    if (!keys || !PyList_Check(keys) || PyList_Size(keys) != self->size)
+    {
+      PyErr_SetString(PyExc_ValueError, "'keys' must be a list of the same length as the BString.");
+      return NULL;
+    }
+    PyObject *dict = PyDict_New();
+    if (!dict)
+      return NULL;
+    BStringNode *current = self->head;
+    for (Py_ssize_t i = 0; i < self->size; ++i)
+    {
+      if (PyDict_SetItem(dict, PyList_GET_ITEM(keys, i), current->str) != 0)
+      {
+        Py_DECREF(dict);
+        return NULL;
+      }
+      current = current->next;
+    }
+    return dict;
+  }
+
+  if (strcmp(container, "csv") == 0)
+  {
+    return _BString_render_as_csv_string(self, delimiter, quotechar, quoting);
+  }
+
+  if (strcmp(container, "json") == 0)
+  {
+    PyObject *data_to_dump = NULL;
+    if (keys == NULL)
+    {                                                          
+      data_to_dump = BString_call(self, PyTuple_New(0), NULL); 
+    }
+    else
+    { 
+      PyObject *kwargs = PyDict_New();
+      PyDict_SetItemString(kwargs, "keys", keys);
+      data_to_dump = BString_call(self, PyTuple_New(0), kwargs); 
+      Py_DECREF(kwargs);
+    }
+    if (!data_to_dump)
+      return NULL;
+
+    PyObject *json_module = PyImport_ImportModule("json");
+    if (!json_module)
+    {
+      Py_DECREF(data_to_dump);
+      return NULL;
+    }
+    PyObject *dumps_func = PyObject_GetAttrString(json_module, "dumps");
+    PyObject *json_string = PyObject_CallFunctionObjArgs(dumps_func, data_to_dump, NULL);
+    Py_DECREF(dumps_func);
+    Py_DECREF(json_module);
+    Py_DECREF(data_to_dump);
+    return json_string;
+  }
+
+  PyErr_SetString(PyExc_ValueError, "Invalid container type specified. Choose from 'list', 'tuple', 'dict', 'csv', 'json'.");
+  return NULL;
+}
+
+static PyObject *BString_extend(BStringObject *self, PyObject *iterable)
+{
+
+  PyObject *iterator = PyObject_GetIter(iterable);
+  if (!iterator)
+  {
+    PyErr_SetString(PyExc_TypeError, "extend() argument must be an iterable");
+    return NULL;
+  }
+  PyObject *item;
+
+  while ((item = PyIter_Next(iterator)))
+  {
+
+    if (!PyUnicode_Check(item))
+    {
+      PyErr_SetString(PyExc_TypeError, "BString can only extend with an iterable of strings");
+      Py_DECREF(item);
+      Py_DECREF(iterator);
+      return NULL;
+    }
+
+    BStringNode *new_node = new_BStringNode(item);
+    if (!new_node)
+    {
+      Py_DECREF(item);
+      Py_DECREF(iterator);
+      return NULL;
+    }
+    if (self->tail == NULL)
+    { 
+      self->head = self->tail = self->current = new_node;
+    }
+    else
+    {
+      self->tail->next = new_node;
+      new_node->prev = self->tail;
+      self->tail = new_node;
+    }
+    self->size++;
+
+    Py_DECREF(item);
+  }
+
+  Py_DECREF(iterator);
+
+  if (PyErr_Occurred())
+  {
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
+static PyObject *BString_iter(BStringObject *self)
+{
+
+  self->current = self->head;
+
+  BStringIterObject *iter = PyObject_New(BStringIterObject, &BStringIter_Type);
+  if (!iter)
+  {
+    return NULL;
+  }
+
+  iter->current_node = self->head;
+  return (PyObject *)iter;
+}
+
+static Py_ssize_t BString_length(BStringObject *self)
+{
+  return self->size;
+}
+
+static PyObject *BString_getitem(BStringObject *self, PyObject *key)
+{
+  if (PySlice_Check(key))
+  {
+    Py_ssize_t start, stop, step, slicelength;
+
+    if (PySlice_GetIndicesEx(key, self->size, &start, &stop, &step, &slicelength) < 0)
+    {
+      return NULL; 
+    }
+
+    BStringObject *result = (BStringObject *)BString_new(&BStringType, NULL, NULL);
+    if (!result)
+      return NULL;
+    if (slicelength <= 0)
+    {
+      return (PyObject *)result; 
+    }
+
+    BStringNode *current = self->head;
+    for (Py_ssize_t i = 0; i < start; ++i)
+    {
+      current = current->next;
+    }
+
+    for (Py_ssize_t i = 0; i < slicelength; ++i)
+    {
+      BStringNode *new_node = new_BStringNode(current->str);
+      if (!new_node)
+      {
+        BString_dealloc(result);
+        return NULL;
+      }
+      if (!result->head)
+      {
+        result->head = result->tail = result->current = new_node;
+      }
+      else
+      {
+        result->tail->next = new_node;
+        new_node->prev = result->tail;
+        result->tail = new_node;
+      }
+      result->size++;
+
+      for (Py_ssize_t j = 0; j < step && current; ++j)
+      {
         current = current->next;
+      }
     }
+    return (PyObject *)result;
+  }
 
-    // Find the node before the slice and the node at the end of the slice.
-    BStringNode *node_before_slice = (start > 0 && current) ? current->prev : NULL;
-    BStringNode *node_at_stop = current;
-    for (Py_ssize_t i = start; i < stop && node_at_stop; ++i) {
-        node_at_stop = node_at_stop->next;
+  else if (PyLong_Check(key))
+  {
+    Py_ssize_t i = PyLong_AsSsize_t(key);
+    if (i < 0)
+    {
+      i += self->size;
     }
-
-    // Delete the nodes in the slice range.
-    for (Py_ssize_t i = start; i < stop; ++i) {
-        if (!current) break; // Should not happen with correct bounds.
-        BStringNode *next_node = current->next;
-        Py_DECREF(current->str);
-        PyMem_Free(current);
-        current = next_node;
-        self->size--;
+    if (i < 0 || i >= self->size)
+    {
+      PyErr_SetString(PyExc_IndexError, "BString index out of range");
+      return NULL;
     }
-
-    // Re-link the list across the gap.
-    if (node_before_slice) {
-        node_before_slice->next = node_at_stop;
-    } else {
-        self->head = node_at_stop; // Deleted from the beginning.
+    BStringNode *current = self->head;
+    for (Py_ssize_t j = 0; j < i; ++j)
+    {
+      current = current->next;
     }
-
-    if (node_at_stop) {
-        node_at_stop->prev = node_before_slice;
-    } else {
-        self->tail = node_before_slice; // Deleted to the end.
-    }
-
-    self->current = self->head; // Reset current pointer to a safe location.
-    return 0;
+    Py_INCREF(current->str);
+    return current->str;
+  }
+  else
+  {
+    PyErr_SetString(PyExc_TypeError, "BString indices must be integers or slices");
+    return NULL;
+  }
 }
 
+static int BString_delete_slice_nodes(BStringObject *self, Py_ssize_t start, Py_ssize_t stop)
+{
+  if (start >= stop)
+  {
+    return 0; 
+  }
 
-static int BString_ass_item(BStringObject *self, PyObject *key, PyObject *value) {
-    // --- Handle Slice Keys ---
-    if (PySlice_Check(key)) {
-        Py_ssize_t start, stop, step, slicelength;
-        if (PySlice_GetIndicesEx(key, self->size, &start, &stop, &step, &slicelength) < 0) {
-            return -1; // Error parsing slice.
-        }
+  BStringNode *current = self->head;
+  for (Py_ssize_t i = 0; i < start && current; ++i)
+  {
+    current = current->next;
+  }
 
-        // For now, we only support simple slices (step=1) for assignment/deletion.
-        if (step != 1) {
-            PyErr_SetString(PyExc_NotImplementedError, "BString slicing with step != 1 is not supported for assignment.");
-            return -1;
-        }
+  BStringNode *node_before_slice = (start > 0 && current) ? current->prev : NULL;
+  BStringNode *node_at_stop = current;
+  for (Py_ssize_t i = start; i < stop && node_at_stop; ++i)
+  {
+    node_at_stop = node_at_stop->next;
+  }
 
-        // First, delete the nodes in the target slice.
-        if (BString_delete_slice_nodes(self, start, stop) != 0) {
-            return -1; // Deletion failed.
-        }
+  for (Py_ssize_t i = start; i < stop; ++i)
+  {
+    if (!current)
+      break; 
+    BStringNode *next_node = current->next;
+    Py_DECREF(current->str);
+    PyMem_Free(current);
+    current = next_node;
+    self->size--;
+  }
 
-        // If 'value' is not NULL, it's an assignment, so insert the new items.
-        // If 'value' is NULL, it was a deletion, and we are done.
-        if (value) {
-            // Find the node at the insertion point.
-            BStringNode *insertion_point = self->head;
-            for (Py_ssize_t i = 0; i < start && insertion_point; ++i) {
-                insertion_point = insertion_point->next;
-            }
+  if (node_before_slice)
+  {
+    node_before_slice->next = node_at_stop;
+  }
+  else
+  {
+    self->head = node_at_stop; 
+  }
+  if (node_at_stop)
+  {
+    node_at_stop->prev = node_before_slice;
+  }
+  else
+  {
+    self->tail = node_before_slice; 
+  }
+  self->current = self->head; 
+  return 0;
+}
 
-            // Get an iterator for the value to be assigned.
-            PyObject *iterator = PyObject_GetIter(value);
-            if (!iterator) {
-                PyErr_SetString(PyExc_TypeError, "can only assign an iterable to a slice");
-                return -1;
-            }
+static int BString_ass_item(BStringObject *self, PyObject *key, PyObject *value)
+{
 
-            // Loop through the iterator and insert new nodes.
-            PyObject *item;
-            BStringNode *last_inserted_node = insertion_point ? insertion_point->prev : self->tail;
-
-            while ((item = PyIter_Next(iterator))) {
-                BStringNode *new_node = new_BStringNode(item);
-                Py_DECREF(item);
-                if (!new_node) { Py_DECREF(iterator); return -1; }
-
-                new_node->prev = last_inserted_node;
-                new_node->next = insertion_point;
-
-                if (last_inserted_node) {
-                    last_inserted_node->next = new_node;
-                } else {
-                    self->head = new_node;
-                }
-                last_inserted_node = new_node;
-                self->size++;
-            }
-            Py_DECREF(iterator);
-
-            if (insertion_point) {
-                insertion_point->prev = last_inserted_node;
-            } else {
-                self->tail = last_inserted_node;
-            }
-            
-            if (PyErr_Occurred()) return -1; // Check for errors during iteration.
-        }
-        return 0; // Success.
+  if (PySlice_Check(key))
+  {
+    Py_ssize_t start, stop, step, slicelength;
+    if (PySlice_GetIndicesEx(key, self->size, &start, &stop, &step, &slicelength) < 0)
+    {
+      return -1; 
     }
-    // --- Handle Integer Keys ---
-    else if (PyLong_Check(key)) {
-        Py_ssize_t i = PyLong_AsSsize_t(key);
-        if (i < 0) { i += self->size; }
 
-        if (i < 0 || i >= self->size) {
-            PyErr_SetString(PyExc_IndexError, "BString assignment index out of range");
-            return -1;
-        }
-
-        BStringNode *target_node = self->head;
-        for (Py_ssize_t j = 0; j < i; ++j) { target_node = target_node->next; }
-
-        // Handle deletion: del my_str[i]
-        if (value == NULL) {
-            // We need a helper for removing a single node to avoid code duplication with pop().
-            // Let's assume a helper BString_remove_node exists.
-            PyObject *removed_str = BString_remove_node(self, target_node);
-            Py_DECREF(removed_str);
-            return 0;
-        }
-
-        // Handle assignment: my_str[i] = "new"
-        if (!PyUnicode_Check(value)) {
-            PyErr_SetString(PyExc_TypeError, "BString items must be strings");
-            return -1;
-        }
-
-        Py_DECREF(target_node->str); // DECREF the old string.
-        Py_INCREF(value);            // INCREF the new one.
-        target_node->str = value;
-        return 0;
+    if (step != 1)
+    {
+      PyErr_SetString(PyExc_NotImplementedError, "BString slicing with step != 1 is not supported for assignment.");
+      return -1;
     }
-    else {
-        PyErr_SetString(PyExc_TypeError, "BString indices must be integers or slices");
+
+    if (BString_delete_slice_nodes(self, start, stop) != 0)
+    {
+      return -1; 
+    }
+
+    if (value)
+    {
+
+      BStringNode *insertion_point = self->head;
+      for (Py_ssize_t i = 0; i < start && insertion_point; ++i)
+      {
+        insertion_point = insertion_point->next;
+      }
+
+      PyObject *iterator = PyObject_GetIter(value);
+      if (!iterator)
+      {
+        PyErr_SetString(PyExc_TypeError, "can only assign an iterable to a slice");
         return -1;
+      }
+
+      PyObject *item;
+      BStringNode *last_inserted_node = insertion_point ? insertion_point->prev : self->tail;
+      while ((item = PyIter_Next(iterator)))
+      {
+        BStringNode *new_node = new_BStringNode(item);
+        Py_DECREF(item);
+        if (!new_node)
+        {
+          Py_DECREF(iterator);
+          return -1;
+        }
+        new_node->prev = last_inserted_node;
+        new_node->next = insertion_point;
+        if (last_inserted_node)
+        {
+          last_inserted_node->next = new_node;
+        }
+        else
+        {
+          self->head = new_node;
+        }
+        last_inserted_node = new_node;
+        self->size++;
+      }
+      Py_DECREF(iterator);
+      if (insertion_point)
+      {
+        insertion_point->prev = last_inserted_node;
+      }
+      else
+      {
+        self->tail = last_inserted_node;
+      }
+      if (PyErr_Occurred())
+        return -1; 
     }
+    return 0; 
+  }
+
+  else if (PyLong_Check(key))
+  {
+    Py_ssize_t i = PyLong_AsSsize_t(key);
+    if (i < 0)
+    {
+      i += self->size;
+    }
+    if (i < 0 || i >= self->size)
+    {
+      PyErr_SetString(PyExc_IndexError, "BString assignment index out of range");
+      return -1;
+    }
+    BStringNode *target_node = self->head;
+    for (Py_ssize_t j = 0; j < i; ++j)
+    {
+      target_node = target_node->next;
+    }
+
+    if (value == NULL)
+    {
+
+      PyObject *removed_str = BString_remove_node(self, target_node);
+      Py_DECREF(removed_str);
+      return 0;
+    }
+
+    if (!PyUnicode_Check(value))
+    {
+      PyErr_SetString(PyExc_TypeError, "BString items must be strings");
+      return -1;
+    }
+    Py_DECREF(target_node->str); 
+    Py_INCREF(value);            
+    target_node->str = value;
+    return 0;
+  }
+  else
+  {
+    PyErr_SetString(PyExc_TypeError, "BString indices must be integers or slices");
+    return -1;
+  }
 }
 
-
-
-// This replaces the old PySequenceMethods definition
-static PySequenceMethods BString_as_sequence = {
-    (lenfunc)BString_length,        // sq_length
-    (binaryfunc)BString_concat,     // sq_concat (+)
-    (ssizeargfunc)BString_repeat,   // sq_repeat (*)
-    0,                              // sq_item (handled by mapping protocol)
-    0,                              // sq_ass_item (handled by mapping protocol)
-    0,                              // sq_contains
-    0,                              // sq_inplace_concat
-    0,                              // sq_inplace_repeat
+static PySequenceMethods BString_as_sequence =
+{
+    (lenfunc)BString_length,      
+    (binaryfunc)BString_concat,   
+    (ssizeargfunc)BString_repeat, 
+    0,                            
+    0,                            
+    0,                            
+    0,                            
+    0,                            
 };
 
-// We use PyMappingMethods because it supports general key types (slices).
-// This is the modern way to implement subscripting.
-static PyMappingMethods BString_as_mapping = {
-    (lenfunc)BString_length,        // mp_length
-    (binaryfunc)BString_getitem,    // mp_subscript
-    (objobjargproc)BString_ass_item // mp_ass_subscript
+static PyMappingMethods BString_as_mapping =
+{
+    (lenfunc)BString_length,        
+    (binaryfunc)BString_getitem,    
+    (objobjargproc)BString_ass_item 
 };
 
-// ============================================================================
-// BString NAVIGATION (REFACTORED)
-// ============================================================================
-
-static PyObject *BString_get_head(BStringObject *self, void *closure) {
-    if (!self->head) Py_RETURN_NONE;
-    Py_INCREF(self->head->str);
-    return self->head->str;
-}
-
-static PyObject *BString_get_tail(BStringObject *self, void *closure) {
-    if (!self->tail) Py_RETURN_NONE;
-    Py_INCREF(self->tail->str);
-    return self->tail->str;
-}
-
-static PyObject *BString_get_current(BStringObject *self, void *closure) {
-    if (!self->current) Py_RETURN_NONE;
-    Py_INCREF(self->current->str);
-    return self->current->str;
-}
-
-// --- NEW METHODS for moving the cursor ---
-
-static PyObject *BString_move_next(BStringObject *self, PyObject *Py_UNUSED(args)) {
-    if (self->current && self->current->next) {
-        self->current = self->current->next;
-        Py_RETURN_TRUE;
-    }
-    Py_RETURN_FALSE;
-}
-
-static PyObject *BString_move_prev(BStringObject *self, PyObject *Py_UNUSED(args)) {
-    if (self->current && self->current->prev) {
-        self->current = self->current->prev;
-        Py_RETURN_TRUE;
-    }
-    Py_RETURN_FALSE;
-}
-
-static PyObject *BString_move_to_head(BStringObject *self, PyObject *Py_UNUSED(args)) {
-    self->current = self->head;
+static PyObject *BString_get_head(BStringObject *self, void *closure)
+{
+  if (!self->head)
     Py_RETURN_NONE;
+  Py_INCREF(self->head->str);
+  return self->head->str;
 }
 
-static PyObject *BString_move_to_tail(BStringObject *self, PyObject *Py_UNUSED(args)) {
-    self->current = self->tail;
+static PyObject *BString_get_tail(BStringObject *self, void *closure)
+{
+  if (!self->tail)
     Py_RETURN_NONE;
+  Py_INCREF(self->tail->str);
+  return self->tail->str;
 }
 
-static PyGetSetDef BString_getsetters[] = {
+static PyObject *BString_get_current(BStringObject *self, void *closure)
+{
+  if (!self->current)
+    Py_RETURN_NONE;
+  Py_INCREF(self->current->str);
+  return self->current->str;
+}
+
+static PyObject *BString_move_next(BStringObject *self, PyObject *Py_UNUSED(args))
+{
+  if (self->current && self->current->next)
+  {
+    self->current = self->current->next;
+    Py_RETURN_TRUE;
+  }
+  Py_RETURN_FALSE;
+}
+
+static PyObject *BString_move_prev(BStringObject *self, PyObject *Py_UNUSED(args))
+{
+  if (self->current && self->current->prev)
+  {
+    self->current = self->current->prev;
+    Py_RETURN_TRUE;
+  }
+  Py_RETURN_FALSE;
+}
+
+static PyObject *BString_move_to_head(BStringObject *self, PyObject *Py_UNUSED(args))
+{
+  self->current = self->head;
+  Py_RETURN_NONE;
+}
+
+static PyObject *BString_move_to_tail(BStringObject *self, PyObject *Py_UNUSED(args))
+{
+  self->current = self->tail;
+  Py_RETURN_NONE;
+}
+
+static PyGetSetDef BString_getsetters[] =
+{
     {"head", (getter)BString_get_head, NULL, "The first string in the sequence (read-only).", NULL},
     {"tail", (getter)BString_get_tail, NULL, "The last string in the sequence (read-only).", NULL},
     {"current", (getter)BString_get_current, NULL, "The string at the current cursor position (read-only).", NULL},
-    {NULL}  /* Sentinel */
+    {NULL} /* Sentinel */
 };
 
-// ============================================================================
-// BString TYPE DEFINITION (MODIFIED)
-// ============================================================================
-PyTypeObject BStringType = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "BeautifulString.BString",
+PyTypeObject BStringType =
+{
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name = "BeautifulString.BString",
     .tp_doc = "A mutable, iterable, multi-string container with slicing.",
     .tp_basicsize = sizeof(BStringObject),
     .tp_itemsize = 0,
@@ -1785,66 +1841,63 @@ PyTypeObject BStringType = {
     .tp_repr = (reprfunc)BString_repr,
     .tp_as_sequence = &BString_as_sequence,
     .tp_as_mapping = &BString_as_mapping,
-    .tp_methods = BString_methods, // ADD THIS
+    .tp_methods = BString_methods, 
     .tp_call = (ternaryfunc)BString_call,
     .tp_iter = (getiterfunc)BString_iter,
     .tp_getset = BString_getsetters,
     .tp_weaklistoffset = offsetof(BStringObject, weakreflist),
 };
 
+static int String_delete_slice_nodes(BStringObject *self, Py_ssize_t start, Py_ssize_t stop)
+{
+  if (start >= stop)
+  {
+    return 0; 
+  }
 
+  BStringNode *current = self->head;
+  for (Py_ssize_t i = 0; i < start && current; ++i)
+  {
+    current = current->next;
+  }
 
-// ============================================================================
-// BString HELPER for Deleting a Slice
-// ============================================================================
-// This is a new helper function to cleanly handle the logic of removing a range of nodes.
-static int String_delete_slice_nodes(BStringObject *self, Py_ssize_t start, Py_ssize_t stop) {
-    // Note: This simple version only handles step=1 slices for deletion.
-    // A full implementation would need to handle steps, but this covers `my_str[a:b]`.
-    if (start >= stop) {
-        return 0; // Nothing to delete
-    }
+  BStringNode *node_before_slice = (start > 0) ? current->prev : NULL;
+  BStringNode *node_at_stop = current;
+  for (Py_ssize_t i = start; i < stop && node_at_stop; ++i)
+  {
+    node_at_stop = node_at_stop->next;
+  }
 
-    // 1. Find the starting node
-    BStringNode *current = self->head;
-    for (Py_ssize_t i = 0; i < start && current; ++i) {
-        current = current->next;
-    }
+  for (Py_ssize_t i = start; i < stop; ++i)
+  {
+    if (!current)
+      break;
+    BStringNode *next_node = current->next;
+    Py_DECREF(current->str);
+    PyMem_Free(current);
+    current = next_node;
+    self->size--;
+  }
 
-    // 2. Find the node *before* the slice and *at the end* of the slice
-    BStringNode *node_before_slice = (start > 0) ? current->prev : NULL;
-    BStringNode *node_at_stop = current;
-    for (Py_ssize_t i = start; i < stop && node_at_stop; ++i) {
-        node_at_stop = node_at_stop->next;
-    }
+  if (node_before_slice)
+  {
+    node_before_slice->next = node_at_stop;
+  }
+  else
+  {
 
-    // 3. Delete nodes from `start` up to (but not including) `stop`
-    for (Py_ssize_t i = start; i < stop; ++i) {
-        if (!current) break;
-        BStringNode *next_node = current->next;
-        Py_DECREF(current->str);
-        PyMem_Free(current);
-        current = next_node;
-        self->size--;
-    }
+    self->head = node_at_stop;
+  }
+  if (node_at_stop)
+  {
+    node_at_stop->prev = node_before_slice;
+  }
+  else
+  {
 
-    // 4. Re-link the list
-    if (node_before_slice) {
-        node_before_slice->next = node_at_stop;
-    } else {
-        // We deleted from the beginning
-        self->head = node_at_stop;
-    }
+    self->tail = node_before_slice;
+  }
 
-    if (node_at_stop) {
-        node_at_stop->prev = node_before_slice;
-    } else {
-        // We deleted to the end
-        self->tail = node_before_slice;
-    }
-
-    // Reset current pointer to a safe location
-    self->current = self->head;
-
-    return 0;
+  self->current = self->head;
+  return 0;
 }

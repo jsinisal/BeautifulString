@@ -1,6 +1,11 @@
-//
-// Created by Juha on 23.6.2025.
-// Part of BeautifulString python module
+/*
+
+This file is part of BeautifulString python extension library.
+Developed by Juha Sinisalo
+Email: juha.a.sinisalo@gmail.com
+
+*/
+
 
 #ifndef STRSCAN_H
 #define STRSCAN_H

@@ -1,7 +1,10 @@
-//
-// Created by Juha on 24.6.2025.
-//
-// Part of BeautifulString python module
+/*
+
+This file is part of BeautifulString python extension library.
+Developed by Juha Sinisalo
+Email: juha.a.sinisalo@gmail.com
+
+*/
 
 #ifndef STRMATCH_H
 #define STRMATCH_H
@@ -9,6 +12,5 @@
 #include <Python.h>
 
 PyObject* strmatch(PyObject *self, PyObject *args, PyObject *kwargs);
-//PyObject* strmatch(PyObject *self, PyObject *args);
 
 #endif //STRMATCH_H

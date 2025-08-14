@@ -1,13 +1,16 @@
-//
-// Created by sinj on 11/07/2025.
-//
+/*
 
-// strlearn.h
+This file is part of BeautifulString python extension library.
+Developed by Juha Sinisalo
+Email: juha.a.sinisalo@gmail.com
+
+*/
+
 #ifndef STRLEARN_H
 #define STRLEARN_H
 
 #include <Python.h>
 
-PyObject* strlearn(PyObject* self, PyObject* args);
+PyObject *strlearn(PyObject *self, PyObject *args, PyObject *kwds);
 
 #endif // STRLEARN_H

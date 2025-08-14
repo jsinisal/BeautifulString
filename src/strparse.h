@@ -1,6 +1,10 @@
-//
-// Created by sinj on 28/06/2025.
-//
+/*
+
+This file is part of BeautifulString python extension library.
+Developed by Juha Sinisalo
+Email: juha.a.sinisalo@gmail.com
+
+*/
 
 #ifndef STRPARSE_H
 #define STRPARSE_H

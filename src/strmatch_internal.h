@@ -1,33 +1,20 @@
-//
-// Created by Juha on 25.6.2025.
-//
-// Part of BeautifulString python module
+/*
+
+This file is part of BeautifulString python extension library.
+Developed by Juha Sinisalo
+Email: juha.a.sinisalo@gmail.com
+
+*/
+
 
 #ifndef STRSEARCH_INTERNAL_H
 #define STRSEARCH_INTERNAL_H
 
 #include <Python.h>
-#include <stdio.h>  // For debug logging
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
-    // Main interface for Python strsearch
-    PyObject* strsearch(PyObject *self, PyObject *args, PyObject *kwargs);
+PyObject* strsearch(PyObject *self, PyObject *args, PyObject *kwargs);
 
-    // Internal matcher used by strmatch and strsearch
-    PyObject* strmatch_internal(
-        PyObject *self,
-        const char *input_str,
-        const char *pattern_str,
-        const char *return_type,
-        int *consumed_chars,
-        int partial_mode
-    );
-
-#ifdef __cplusplus
-}
-#endif
+PyObject* strmatch_internal(PyObject *self, const char *input_str, const char *pattern_str, const char *return_type, int *consumed_chars, int partial_mode);
 
 #endif // STRSEARCH_INTERNAL_H

@@ -1,197 +1,316 @@
-// strparse.c
+/*
+This file is part of BeautifulString python extension library.
+Developed by Juha Sinisalo
+Email: juha.a.sinisalo@gmail.com
+*/
+
 #include "strparse.h"
 #include <Python.h>
-#include <string.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <ctype.h>
+#include <string.h>
 
-#define MAX_FIELDS 64
-
-// Structure to hold specifier details
-typedef struct {
-    int type;  // 1=s, 2=d, 3=f, 4=u, 5=lf, 6=x
-    char name[64];
-} FormatField;
-
-static int parse_format_string(const char *format_str, FormatField fields[], int *field_count) {
-    int count = 0;
-    const char *p = format_str;
-    while (*p && count < MAX_FIELDS) {
-        if (*p == '%') {
-            p++;
-            int type = 0;
-            if (*p == 's') type = 1;
-            else if (*p == 'd') type = 2;
-            else if (*p == 'f') type = 3;
-            else if (*p == 'u') type = 4;
-            else if (*p == 'x') type = 6;
-            else if (*p == 'l' && *(p+1) == 'f') { type = 5; p++; }
-            else continue;
-            p++;
-            if (*p == '(') {
-                p++;
-                const char *start = p;
-                while (*p && *p != ')') p++;
-                size_t len = p - start;
-                if (len >= sizeof(fields[count].name)) return -1;
-                strncpy(fields[count].name, start, len);
-                fields[count].name[len] = '\0';
-                if (*p == ')') p++;
-            } else {
-                snprintf(fields[count].name, sizeof(fields[count].name), "field%d", count+1);
-            }
-            fields[count].type = type;
-            count++;
-        } else {
-            p++;
-        }
-    }
-    *field_count = count;
-    return 0;
+static const char *skip_whitespace(const char *s)
+{
+  while (isspace((unsigned char)*s))
+    s++;
+  return s;
 }
 
-static int skip_literal(const char **s_ptr, const char **f_ptr) {
-    const char *s = *s_ptr;
-    const char *f = *f_ptr;
-    while (*f && *f != '%') {
-        if (isspace(*f)) {
-            while (isspace(*s)) s++;
-            while (isspace(*f)) f++;
-        } else {
-            if (*s != *f) return 0;
-            s++;
-            f++;
+static char *parse_string_token(const char **input_ptr)
+{
+  const char *p = *input_ptr;
+  char *buffer = NULL;
+  size_t i = 0;
+  if (*p == '"' || *p == '\'')
+  {
+    char quote_char = *p++;
+    size_t buffer_size = 128;
+    buffer = malloc(buffer_size);
+    if (!buffer)
+      return NULL;
+    while (*p && *p != quote_char)
+    {
+      if (i >= buffer_size - 1)
+      {
+        buffer_size *= 2;
+        char *new_buffer = realloc(buffer, buffer_size);
+        if (!new_buffer)
+        {
+          free(buffer);
+          return NULL;
         }
+        buffer = new_buffer;
+      }
+      if (*p == '\\' && *(p + 1))
+      {
+        p++;
+        switch (*p)
+        {
+        case 'n':
+          buffer[i++] = '\n';
+          break;
+        case 't':
+          buffer[i++] = '\t';
+          break;
+        case '"':
+          buffer[i++] = '"';
+          break;
+        case '\'':
+          buffer[i++] = '\'';
+          break;
+        case '\\':
+          buffer[i++] = '\\';
+          break;
+        default:
+          buffer[i++] = *p;
+          break;
+        }
+      }
+      else
+      {
+        buffer[i++] = *p;
+      }
+      p++;
     }
-    *s_ptr = s;
-    *f_ptr = f;
-    return 1;
+    if (*p == quote_char)
+      p++;
+  }
+  else
+  {
+    const char *start = p;
+    while (*p && !isspace((unsigned char)*p))
+      p++;
+    size_t len = p - start;
+    if (len == 0)
+      return strdup("");
+    buffer = malloc(len + 1);
+    if (!buffer)
+      return NULL;
+    memcpy(buffer, start, len);
+    i = len;
+  }
+  if (buffer)
+    buffer[i] = '\0';
+  *input_ptr = p;
+  return buffer;
 }
 
-PyObject* strparse(PyObject *self, PyObject *args, PyObject *kwargs) {
-    const char *input_str;
-    const char *format_str;
-    const char *return_type = "dict";
-
-    static char *kwlist[] = {"input_str", "format_str", "return_type", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|s", kwlist,
-                                     &input_str, &format_str, &return_type)) {
-        return NULL;
-    }
-
-    FormatField fields[MAX_FIELDS];
-    int field_count = 0;
-    if (parse_format_string(format_str, fields, &field_count) != 0) {
-        PyErr_SetString(PyExc_ValueError, "Failed to parse format string");
-        return NULL;
-    }
-
-    PyObject *result = NULL;
-    if (strcmp(return_type, "dict") == 0) {
-        result = PyDict_New();
-    } else if (strcmp(return_type, "tuple") == 0 || strcmp(return_type, "tuple_list") == 0) {
-        result = PyList_New(0);
-    } else {
-        PyErr_SetString(PyExc_ValueError, "Invalid return_type");
-        return NULL;
-    }
-
-    const char *s = input_str;
-    const char *f = format_str;
-
-    for (int i = 0; i < field_count; i++) {
-        if (!skip_literal(&s, &f)) {
-            Py_XDECREF(result);
-            PyErr_SetString(PyExc_ValueError, "Failed to match literal text in format string");
-            return NULL;
+PyObject *strparse(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+  const char *input_str;
+  const char *format_str;
+  const char *return_type = "dict";
+  PyObject *dict_keys_obj = NULL;
+  static char *kwlist[] = {"input_str", "format_str", "return_type", "dict_keys", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|sO", kwlist, &input_str, &format_str, &return_type, &dict_keys_obj))
+  {
+    return NULL;
+  }
+  int is_dict = strcmp(return_type, "dict") == 0;
+  int is_tuple = strcmp(return_type, "tuple") == 0;
+  int is_tuple_list = strcmp(return_type, "tuple_list") == 0;
+  int is_list = strcmp(return_type, "list") == 0;
+  if (!is_dict && !is_tuple && !is_tuple_list && !is_list)
+  {
+    PyErr_SetString(PyExc_ValueError, "Invalid return_type");
+    return NULL;
+  }
+  PyObject *values_list = PyList_New(0);
+  PyObject *names_list = PyList_New(0);
+  if (!values_list || !names_list)
+    goto fail;
+  const char *s = input_str;
+  const char *f = format_str;
+  int field_index = 0;
+  while (*f)
+  {
+    if (*f == '%')
+    {
+      f++; 
+      char type = *f;
+      if (type == 'l' && *(f + 1) == 'f')
+      {
+        type = 'f';
+        f++;
+      }
+      f++;
+      char name_buffer[64];
+      if (*f == '(')
+      {
+        f++;
+        const char *name_start = f;
+        while (*f && *f != ')')
+          f++;
+        size_t len = f - name_start;
+        if (len >= sizeof(name_buffer) || !*f)
+        {
+          PyErr_SetString(PyExc_ValueError, "Invalid field name");
+          goto fail;
         }
-
-        // Skip format specifier
-        if (*f == '%') {
-            f++;
-            if (*f == 'l' && *(f+1) == 'f') f += 2;
-            else f++;
-            if (*f == '(') {
-                while (*f && *f != ')') f++;
-                if (*f == ')') f++;
-            }
+        memcpy(name_buffer, name_start, len);
+        name_buffer[len] = '\0';
+        f++;
+      }
+      else
+      {
+        snprintf(name_buffer, sizeof(name_buffer), "field%d", field_index + 1);
+      }
+      PyList_Append(names_list, PyUnicode_FromString(name_buffer));
+      s = skip_whitespace(s);
+      if (*s == '\0')
+      {
+        PyErr_SetString(PyExc_ValueError, "Input ended before all fields were parsed");
+        goto fail;
+      }
+      PyObject *val = NULL;
+      char *endptr;
+      switch (type)
+      {
+      case 's':
+      {
+        char *str_val = parse_string_token(&s);
+        if (!str_val)
+        {
+          PyErr_SetString(PyExc_ValueError, "Failed to parse string");
+          goto fail;
         }
-
-        while (isspace(*s)) s++;
-
-        char buffer[256] = {0};
-        int matched = 0;
-        PyObject *val = NULL;
-        int consumed = 0;
-
-        switch (fields[i].type) {
-            case 1:
-                matched = sscanf(s, "%255s%n", buffer, &consumed);
-                if (matched == 1) val = PyUnicode_FromString(buffer);
-                break;
-            case 2: {
-                int ivalue;
-                matched = sscanf(s, "%d%n", &ivalue, &consumed);
-                if (matched == 1) val = PyLong_FromLong(ivalue);
-                break;
-            }
-            case 3: {
-                float fval;
-                matched = sscanf(s, "%f%n", &fval, &consumed);
-                if (matched == 1) val = PyFloat_FromDouble(fval);
-                break;
-            }
-            case 4: {
-                unsigned int uval;
-                matched = sscanf(s, "%u%n", &uval, &consumed);
-                if (matched == 1) val = PyLong_FromUnsignedLong(uval);
-                break;
-            }
-            case 5: {
-                double lfval;
-                matched = sscanf(s, "%lf%n", &lfval, &consumed);
-                if (matched == 1) val = PyFloat_FromDouble(lfval);
-                break;
-            }
-            case 6: {
-                int hexval;
-                matched = sscanf(s, "%x%n", &hexval, &consumed);
-                if (matched == 1) val = PyLong_FromLong(hexval);
-                break;
-            }
+        val = PyUnicode_FromString(str_val);
+        free(str_val);
+        break;
+      }
+      case 'd':
+      {
+        long v = strtol(s, &endptr, 10);
+        if (s == endptr)
+        {
+          PyErr_SetString(PyExc_ValueError, "Invalid integer");
+          goto fail;
         }
-
-        if (!val) {
-            Py_XDECREF(result);
-            PyErr_Format(PyExc_ValueError, "Failed to parse field: %s", fields[i].name);
-            return NULL;
+        s = endptr;
+        val = PyLong_FromLong(v);
+        break;
+      }
+      case 'f':
+      {
+        double v = strtod(s, &endptr);
+        if (s == endptr)
+        {
+          PyErr_SetString(PyExc_ValueError, "Invalid float");
+          goto fail;
         }
-
-        if (strcmp(return_type, "dict") == 0) {
-            PyDict_SetItemString(result, fields[i].name, val);
-            Py_DECREF(val);
-        } else if (strcmp(return_type, "tuple_list") == 0) {
-            PyObject *key = PyUnicode_FromString(fields[i].name);
-            PyObject *pair = PyTuple_Pack(2, key, val);
-            Py_DECREF(key);
-            Py_DECREF(val);
-            PyList_Append(result, pair);
-            Py_DECREF(pair);
-        } else {
-            PyList_Append(result, val);
-            Py_DECREF(val);
+        s = endptr;
+        val = PyFloat_FromDouble(v);
+        break;
+      }
+      case 'u':
+      {
+        unsigned long v = strtoul(s, &endptr, 10);
+        if (s == endptr)
+        {
+          PyErr_SetString(PyExc_ValueError, "Invalid unsigned integer");
+          goto fail;
         }
-
-        s += consumed;
-        while (isspace(*s)) s++;
+        s = endptr;
+        val = PyLong_FromUnsignedLong(v);
+        break;
+      }
+      case 'x':
+      {
+        unsigned long v = strtoul(s, &endptr, 16);
+        if (s == endptr)
+        {
+          PyErr_SetString(PyExc_ValueError, "Invalid hex integer");
+          goto fail;
+        }
+        s = endptr;
+        val = PyLong_FromUnsignedLong(v);
+        break;
+      }
+      default:
+        PyErr_Format(PyExc_ValueError, "Unknown format specifier: %c", type);
+        goto fail;
+      }
+      if (!val)
+        goto fail;
+      PyList_Append(values_list, val);
+      Py_DECREF(val);
+      field_index++;
     }
-
-    if (strcmp(return_type, "tuple") == 0) {
-        PyObject *t = PyList_AsTuple(result);
-        Py_DECREF(result);
-        return t;
+    else if (isspace((unsigned char)*f))
+    {
+      f = skip_whitespace(f);
+      s = skip_whitespace(s);
     }
+    else
+    { 
+      if (*f != *s)
+      {
+        PyErr_Format(PyExc_ValueError, "Literal '%c' not found", *f);
+        goto fail;
+      }
+      f++;
+      s++;
+    }
+  }
+  s = skip_whitespace(s);
+  if (*s != '\0')
+  {
+    PyErr_SetString(PyExc_ValueError, "Input string has trailing characters");
+    goto fail;
+  }
+  if (is_dict)
+  {
+    PyObject *dict = PyDict_New();
+    PyObject *key_source = (dict_keys_obj && PySequence_Check(dict_keys_obj)) ? dict_keys_obj : names_list;
+    if (PySequence_Length(key_source) != field_index)
+    {
+      PyErr_SetString(PyExc_ValueError, "Number of keys must match number of fields parsed");
+      Py_DECREF(dict);
+      goto fail;
+    }
+    for (int i = 0; i < field_index; i++)
+    {
+      PyObject *key = PySequence_GetItem(key_source, i);
+      PyObject *value = PyList_GetItem(values_list, i);
+      if (!key)
+      {
+        Py_DECREF(dict);
+        goto fail;
+      }
+      PyDict_SetItem(dict, key, value);
+      Py_DECREF(key);
+    }
+    Py_DECREF(values_list);
+    Py_DECREF(names_list);
+    return dict;
+  }
+  if (is_tuple_list)
+  {
+    PyObject *list = PyList_New(0);
+    for (int i = 0; i < field_index; i++)
+    {
+      PyObject *pair = PyTuple_Pack(2, PyList_GetItem(names_list, i), PyList_GetItem(values_list, i));
+      PyList_Append(list, pair);
+      Py_DECREF(pair);
+    }
+    Py_DECREF(values_list);
+    Py_DECREF(names_list);
+    return list;
+  }
+  if (is_tuple)
+  {
+    PyObject *tup = PyList_AsTuple(values_list);
+    Py_DECREF(values_list);
+    Py_DECREF(names_list);
+    return tup;
+  }
+  Py_DECREF(names_list);
+  return values_list;
 
-    return result;
+fail:
+  Py_XDECREF(values_list);
+  Py_XDECREF(names_list);
+  return NULL;
 }
